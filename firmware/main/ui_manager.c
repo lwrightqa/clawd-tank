@@ -6,6 +6,7 @@
 #include "config_store.h"
 #include "display.h"
 #include "rgb_led.h"
+#include "layout.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <time.h>
@@ -21,15 +22,20 @@ typedef enum {
     UI_STATE_DISCONNECTED,
 } ui_state_t;
 
-#define SCENE_FULL_WIDTH   320
-#define SCENE_FULL_HEIGHT  172
-#define SCENE_NOTIF_WIDTH  107
-#define SCENE_ANIM_MS      400
+/* Scene width beside the notification panel. 320 layout: 107 px, the panel takes the other 213.
+ * Wide layout: the panel is NOTIF_PANEL_WIDTH_WIDE px and the scene keeps the rest (340 px on the
+ * 640 x 172 MiniBar bar). Chosen at run time in ui_manager_init from the display width. */
+#define SCENE_NOTIF_WIDTH_320   107
+#define NOTIF_PANEL_WIDTH_WIDE  300
+#define SCENE_ANIM_MS           400
 
 /* ---------- Module state ---------- */
 
 static ui_state_t s_state = UI_STATE_DISCONNECTED;
 static notification_store_t s_store;
+
+static int s_full_width = LAYOUT_BASE_WIDTH;        /* the display width: the scene's full width */
+static int s_notif_width = SCENE_NOTIF_WIDTH_320;   /* the scene's width while the panel is open */
 
 /* Protects all LVGL calls and store mutations that happen from two contexts:
  *   - ui_task (via ui_manager_handle_event + ui_manager_tick → lv_timer_handler)
@@ -101,7 +107,7 @@ static void transition_to(ui_state_t new_state)
 
     switch (new_state) {
     case UI_STATE_FULL_IDLE:
-        scene_animate_width(SCENE_FULL_WIDTH, SCENE_ANIM_MS);
+        scene_animate_width(s_full_width, SCENE_ANIM_MS);
         notification_ui_show(s_notif_ui, false, 0);
 
         scene_set_time_visible(s_scene, true);
@@ -121,7 +127,7 @@ static void transition_to(ui_state_t new_state)
         break;
 
     case UI_STATE_NOTIFICATION:
-        scene_animate_width(SCENE_NOTIF_WIDTH,
+        scene_animate_width(s_notif_width,
                             old_state == UI_STATE_FULL_IDLE ? SCENE_ANIM_MS : 0);
         notification_ui_show(s_notif_ui, true, 300);
 
@@ -136,7 +142,7 @@ static void transition_to(ui_state_t new_state)
         break;
 
     case UI_STATE_DISCONNECTED:
-        scene_animate_width(SCENE_FULL_WIDTH, SCENE_ANIM_MS);
+        scene_animate_width(s_full_width, SCENE_ANIM_MS);
         notification_ui_show(s_notif_ui, false, 0);
 
         scene_set_time_visible(s_scene, false);
@@ -154,28 +160,22 @@ void ui_manager_init(void)
 
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x0f1320), 0);
 
-    /* The 320 x 172 layout lives in a panel centred on the display: at x 0 on a 320-wide screen (the simulator),
-     * at x 160 on the MiniBar bar's 640 x 172, with black either side. Everything in scene.c and notification_ui.c
-     * is sized and aligned inside its parent, so nothing else moves. */
-    lv_obj_t *panel = lv_obj_create(screen);
-    lv_obj_remove_style_all(panel);
-    lv_obj_set_size(panel, SCENE_FULL_WIDTH, SCENE_FULL_HEIGHT);
-    int32_t panel_x = (lv_display_get_horizontal_resolution(NULL) - SCENE_FULL_WIDTH) / 2;
-    lv_obj_set_pos(panel, panel_x > 0 ? panel_x : 0, 0);
-    lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(0x0f1320), 0);
+    /* The layout follows the display width (layout.h): the scene spans the whole display, and while the
+     * notification panel is open it keeps s_notif_width of it. 320 x 172 (the simulator, the original
+     * board) is the original layout; the MiniBar bar's 640 x 172 gets the wide one. */
+    s_full_width = layout_display_width();
+    s_notif_width = layout_is_wide(s_full_width) ? s_full_width - NOTIF_PANEL_WIDTH_WIDE
+                                                 : SCENE_NOTIF_WIDTH_320;
 
     /* Create scene (left panel — starts full width) */
-    s_scene = scene_create(panel);
-    scene_set_width(s_scene, SCENE_FULL_WIDTH, 0);
+    s_scene = scene_create(screen);
+    scene_set_width(s_scene, s_full_width, 0);
     scene_set_clawd_anim(s_scene, CLAWD_ANIM_DISCONNECTED);
 
     /* Create notification UI (right panel — starts hidden) */
-    s_notif_ui = notification_ui_create(panel);
+    s_notif_ui = notification_ui_create(screen);
 
     s_state = UI_STATE_DISCONNECTED;
     s_connected = false;
