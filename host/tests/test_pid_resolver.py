@@ -4,7 +4,18 @@ long-lived Claude Code PID, mirroring claude-plugins/agent-bus/lib/common.sh.
 
 from unittest.mock import patch, MagicMock
 
+import pytest
+
+from clawd_tank_daemon import procutil
 from clawd_tank_daemon.pid_resolver import find_claude_pid
+
+
+@pytest.fixture(autouse=True)
+def _posix_ps_walk():
+    """These tests mock `ps`, i.e. the POSIX resolver. Windows resolves PIDs a
+    different way (see test_pid_resolver_windows.py), so pin the POSIX branch."""
+    with patch.object(procutil, "IS_WINDOWS", False):
+        yield
 
 
 def _make_ps_mock(responses):
