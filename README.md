@@ -44,6 +44,33 @@ Claude Code hooks --> clawd-tank-notify --> daemon --> BLE --> ESP32-C6 display
 - **RGB LED**: Onboard WS2812B on GPIO8 — flashes on incoming notifications
 - **Connectivity**: BLE 5.0 (NimBLE, peripheral role)
 
+## MiniBar bar (ESP32-S3-Touch-LCD-3.49 V2) port
+
+The `bar` branch runs Clawd Tank on the Waveshare ESP32-S3-Touch-LCD-3.49 V2 (ESP32-S3R8: 16 MB flash, 8 MB octal PSRAM, a 640 x 172 AXS15231B panel over QSPI, a TCA9554 I/O expander, no WS2812 LED). It is a standalone build of this repo; nothing from the MiniBar project is needed at build time.
+
+What changed (all under `firmware/`):
+
+- `main/display.c`: the ST7789 SPI bring-up is replaced by the AXS15231B QSPI bring-up (SPI3, 40 MHz, mode 3, 32-bit commands). LVGL runs at the native 172 x 640 with one full-frame RGB565 buffer in PSRAM, software-rotated to 640 x 172 landscape in the flush callback and sent in ten 64-line chunks through a 21.5 KB internal DMA buffer. The backlight is the board's inverted PWM on GPIO 42 plus the enable line on the expander; the BLE brightness setting (0-255) is mapped onto it through MiniBar's brightness curve, and nothing lights before the first frame has reached the panel. `CONFIG_CLAWD_LCD_TURN_180` (menuconfig, "Clawd Configuration") turns the picture if it comes up upside down.
+- `main/board_exio.c`, `main/board_pins.h`: the expander driver and the power-on sequence (SYS_EN power hold, LCD reset high, backlight enable low), run first in `app_main`.
+- `main/board_lv_mem.c`: LVGL's own allocations go to PSRAM (`CONFIG_LV_USE_CUSTOM_MALLOC`).
+- `main/ui_manager.c`: the 320 x 172 scene lives in a panel centred on the 640 x 172 display (x 160), black either side; the scene and notification layout code is untouched. On the simulator's 320-wide display the panel sits at x 0.
+- `main/rgb_led.c`: a no-op on the device (the board has no LED; the simulator keeps its on-screen LED). `main/button.c`: the BOOT button is GPIO 0.
+- `sdkconfig.defaults`, `partitions.csv`, `main/idf_component.yml`: ESP32-S3 at 240 MHz, 16 MB flash (QIO, 80 MHz), octal PSRAM at 80 MHz with `malloc()` in PSRAM above 4 KB, USB Serial/JTAG console; the factory app partition grown to 0xFF0000 (the partition names stay, so `config_store` keeps its NVS); LVGL pinned to 9.5.0, `espressif/esp_lcd_axs15231b` 1.0.x added, `espressif/led_strip` dropped.
+
+Build with ESP-IDF 5.4.2 (the component manager fetches LVGL and the panel driver on the first configure):
+
+```bash
+cd firmware
+idf.py set-target esp32s3
+idf.py build
+```
+
+Build result on 2026-10-20 (ESP-IDF 5.4.2, LVGL 9.5.0, `esp_lcd_axs15231b` 1.0.1~1): 0 errors, 0 warnings. `clawd-tank.bin` is 0x1FB9D0 bytes (2,079,184, about 2.0 MB) against the 0xFF0000-byte factory partition, 0xDF4630 bytes (88%) free.
+
+**Not flashed yet.** This port has only been built. The panel init, the orientation and the brightness curve are what MiniBar runs on the same board, but nothing here has been seen on hardware. When flashing, use `idf.py -p <port> flash monitor`; the board's USB-C is the ESP32-S3's USB Serial/JTAG port.
+
+Attribution: the board bring-up (expander driver and power hold, panel reset and init sequence, QSPI settings, chunked flush, backlight PWM and brightness curve, pin map) is taken from the MiniBar project's board layer (`firmware/components/board/`), which ported it from Waveshare's ESP-IDF examples for the V2 board (`10_LVGL_V9_Test`, `11_FactoryProgram`, `07_BATT_PWR_Test`). The AXS15231B panel driver is Espressif's `esp_lcd_axs15231b` component (Apache-2.0), pulled by the component manager, not vendored.
+
 ## Quick Start
 
 ### Download (no hardware needed)
