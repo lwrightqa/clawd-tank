@@ -1420,6 +1420,16 @@ async def test_dedup_only_fires_on_session_start():
 
 # --- Liveness polling (ghost-crab fix) ---
 
+@pytest.fixture
+def posix_liveness():
+    """The tests below mock os.kill, which is the POSIX probe. On Windows the
+    probe is OpenProcess (covered in test_procutil.py), so pin the POSIX branch."""
+    from unittest.mock import patch as _patch
+    from clawd_tank_daemon import procutil
+    with _patch.object(procutil, "IS_WINDOWS", False):
+        yield
+
+@pytest.mark.usefixtures("posix_liveness")
 def test_liveness_evicts_dead_pid():
     """Session whose stored PID raises ProcessLookupError on kill(pid, 0) is evicted."""
     from unittest.mock import patch
@@ -1437,6 +1447,7 @@ def test_liveness_evicts_dead_pid():
     assert d._session_order == []
 
 
+@pytest.mark.usefixtures("posix_liveness")
 def test_liveness_keeps_alive_pid():
     """Session whose PID is alive (kill returns) stays."""
     from unittest.mock import patch
@@ -1452,6 +1463,7 @@ def test_liveness_keeps_alive_pid():
     assert "s1" in d._session_states
 
 
+@pytest.mark.usefixtures("posix_liveness")
 def test_liveness_skips_sessions_without_pid():
     """No-pid sessions (e.g. post-restart, pre-first-event) are skipped, not evicted."""
     from unittest.mock import patch
@@ -1467,6 +1479,7 @@ def test_liveness_skips_sessions_without_pid():
     assert "s1" in d._session_states
 
 
+@pytest.mark.usefixtures("posix_liveness")
 def test_liveness_treats_permission_error_as_alive():
     """If kill raises PermissionError (PID belongs to another user), assume alive."""
     from unittest.mock import patch
@@ -1482,6 +1495,7 @@ def test_liveness_treats_permission_error_as_alive():
     assert "s1" in d._session_states
 
 
+@pytest.mark.usefixtures("posix_liveness")
 def test_liveness_persists_after_eviction(tmp_path):
     """After evicting a dead session, the persisted sessions.json reflects it."""
     from unittest.mock import patch
