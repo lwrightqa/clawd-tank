@@ -3,6 +3,13 @@
 
 Reads hook payload from stdin, forwards to the Clawd Tank daemon.
 Starts the daemon if not running.
+
+The daemon is reached over a Unix socket (macOS, Linux) or TCP on 127.0.0.1
+(Windows, or CLAWD_TANK_TRANSPORT=tcp); see clawd_tank_daemon/hook_transport.py.
+On Windows run it as `py -3 <path>\\clawd-tank-notify`. When it auto-starts the
+daemon it uses the Python that runs this script, which therefore needs bleak:
+the hooks that `python -m clawd_tank_daemon.install_hooks` writes use a
+standalone copy that never starts the daemon (start it from your venv).
 """
 
 import json
@@ -16,9 +23,20 @@ from pathlib import Path
 # Ensure clawd_tank_daemon package is importable
 sys.path.insert(0, str(Path(__file__).parent))
 
+from clawd_tank_daemon import hook_transport  # noqa: E402
+from clawd_tank_daemon.procutil import IS_WINDOWS, pid_alive  # noqa: E402
+
 CLAWD_DIR = Path.home() / ".clawd-tank"
 PID_PATH = CLAWD_DIR / "daemon.pid"
-SOCKET_PATH = CLAWD_DIR / "sock"
+
+
+def _endpoint() -> tuple:
+    """(transport, unix socket path, tcp port) from the environment."""
+    return (
+        hook_transport.resolve_transport(),
+        hook_transport.resolve_socket_path(),
+        hook_transport.resolve_tcp_port(),
+    )
 
 
 def is_daemon_running() -> bool:
@@ -27,11 +45,24 @@ def is_daemon_running() -> bool:
         return False
     try:
         pid = int(PID_PATH.read_text().strip())
-        os.kill(pid, 0)  # Check if process exists
-        return True
-    except (ValueError, ProcessLookupError, PermissionError, OSError):
-        # Stale PID file
+    except (ValueError, OSError):
         PID_PATH.unlink(missing_ok=True)
+        return False
+    if pid_alive(pid):
+        return True
+    # Stale PID file
+    PID_PATH.unlink(missing_ok=True)
+    return False
+
+
+def _daemon_endpoint_ready() -> bool:
+    transport, socket_path, tcp_port = _endpoint()
+    if transport == "unix":
+        return socket_path.exists()
+    try:
+        hook_transport.connect(transport, socket_path, tcp_port, timeout=0.2).close()
+        return True
+    except OSError:
         return False
 
 
@@ -39,20 +70,32 @@ def start_daemon() -> None:
     """Start the daemon in the background."""
     CLAWD_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Detach so the daemon outlives the hook process. POSIX: a new session.
+    # Windows: no console of its own and its own process group, so closing the
+    # terminal Claude Code runs in, or Ctrl+C there, does not take it down.
+    detach = {}
+    if IS_WINDOWS:
+        detach["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        detach["start_new_session"] = True
+
     # Start daemon as a detached subprocess. The log file is opened in a
     # with block so it is closed promptly even if Popen raises.
     with open(CLAWD_DIR / "daemon.log", "a") as log_file:
         subprocess.Popen(
             [sys.executable, "-m", "clawd_tank_daemon.daemon"],
             cwd=str(Path(__file__).parent),
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **detach,
         )
 
-    # Wait for socket to appear
+    # Wait for the daemon to start listening
     for _ in range(50):  # 5 seconds max
-        if SOCKET_PATH.exists():
+        if _daemon_endpoint_ready():
             return
         time.sleep(0.1)
 
@@ -60,39 +103,54 @@ def start_daemon() -> None:
 
 
 def send_to_daemon(payload: dict) -> None:
-    """Send a JSON message to the daemon via Unix socket."""
+    """Send a JSON message to the daemon (Unix socket or localhost TCP)."""
     from clawd_tank_daemon.protocol import hook_payload_to_daemon_message
+
+    if IS_WINDOWS and payload.get("pid") is None:
+        # No `ps` here: stamp the Claude Code PID the way the standalone
+        # script does (CLAUDE_PID, else the claude.exe ancestor), so the
+        # daemon can dedup /clear and evict a session whose Claude has gone.
+        from clawd_tank_daemon.pid_resolver import find_claude_pid
+        payload = dict(payload, pid=find_claude_pid())
 
     msg = hook_payload_to_daemon_message(payload)
     if msg is None:
         return  # Irrelevant hook event
 
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    transport, socket_path, tcp_port = _endpoint()
+    sock = None
     try:
-        sock.settimeout(3.0)
-        sock.connect(str(SOCKET_PATH))
+        sock = hook_transport.connect(transport, socket_path, tcp_port, timeout=3.0)
         # Messages are newline-delimited so the server can use readline()
         # for a reliable message boundary.
         sock.sendall(json.dumps(msg).encode("utf-8") + b"\n")
-    except (ConnectionRefusedError, FileNotFoundError, socket.timeout) as e:
+    except OSError as e:
         print(f"Failed to send to daemon: {e}", file=sys.stderr)
         # Exit 0: notifications are best-effort; a non-zero exit would
         # surface a noisy error in Claude Code for a non-critical failure.
         sys.exit(0)
     finally:
-        sock.close()
+        if sock is not None:
+            sock.close()
 
 
 def main():
-    # Read hook payload from stdin
+    # Read hook payload from stdin (bytes, decoded as UTF-8: Windows' default
+    # text encoding would garble a non-ASCII project folder)
     try:
-        raw = sys.stdin.read()
+        raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
         if not raw.strip():
             sys.exit(0)
         payload = json.loads(raw)
     except json.JSONDecodeError as e:
         print(f"Invalid JSON from hook: {e}", file=sys.stderr)
         sys.exit(1)
+
+    try:
+        _endpoint()
+    except ValueError as e:
+        print(f"clawd-tank-notify: {e}", file=sys.stderr)
+        sys.exit(0)  # misconfigured, but never break the Claude Code session
 
     # Ensure daemon is running
     if not is_daemon_running():
