@@ -6,6 +6,8 @@ import pytest
 from unittest.mock import patch
 from clawd_tank_daemon.sim_process import SimProcessManager
 
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="resolves through NSBundle, which only exists on macOS")
 def test_find_binary_in_app_bundle():
     """When running inside an .app bundle, finds sim in Contents/Resources/."""
     mgr = SimProcessManager()
