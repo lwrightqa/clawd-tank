@@ -4,8 +4,9 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "board_pins.h"
 
-#define BUTTON_GPIO     GPIO_NUM_9  /* BOOT button on ESP32-C6 */
+#define BUTTON_GPIO     BOARD_BTN_BOOT  /* BOOT button: GPIO 0 on the ESP32-S3-Touch-LCD-3.49 V2 (active low, 10k pull-up) */
 #define DEBOUNCE_US     200000  /* 200ms debounce */
 
 static const char *TAG = "button";

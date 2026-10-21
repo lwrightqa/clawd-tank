@@ -10,6 +10,7 @@
 #include "ui_manager.h"
 #include "config_store.h"
 #include "button.h"
+#include "board_exio.h"
 #include "esp_heap_caps.h"
 
 static const char *TAG = "clawd-tank";
@@ -36,6 +37,11 @@ static void ui_task(void *arg) {
 }
 
 void app_main(void) {
+    // MiniBar bar: hold the power first (SYS_EN on the TCA9554 expander). On battery the board switches itself off
+    // once the PWR key is released unless the firmware holds it; on USB this changes nothing. Idempotent;
+    // display_init() repeats it.
+    board_power_hold();
+
     ESP_LOGI(TAG, "Clawd Tank starting...");
 
     // Create event queue (BLE -> UI)
@@ -48,7 +54,7 @@ void app_main(void) {
     // Init config store — must be before display_init for brightness
     config_store_init();
 
-    // Init display (SPI + LVGL).
+    // Init display (QSPI panel + LVGL).
     // Return value intentionally discarded: display_init() registers the
     // lv_display_t* as LVGL's default display internally, so callers never
     // need to hold the pointer — lv_display_get_default() retrieves it later.

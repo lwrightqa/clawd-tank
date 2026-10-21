@@ -591,10 +591,12 @@ scene_t *scene_create(lv_obj_t *parent)
     lv_obj_align(s->hud_canvas, LV_ALIGN_TOP_LEFT, 4, 2);
     lv_obj_add_flag(s->hud_canvas, LV_OBJ_FLAG_HIDDEN);
 
-    /* HUD: overflow/total badge canvas (positioned at right edge of container) */
+    /* HUD: overflow/total badge canvas (positioned at right edge of container). Created on the scene's parent,
+     * not the container, so the container's width animation doesn't move it; the parent is the 320-wide layout
+     * panel (ui_manager.c), centred on the MiniBar bar's 640 x 172 display, so the 320 in scene_update_hud holds. */
     lv_obj_set_scrollbar_mode(lv_screen_active(), LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(lv_screen_active(), LV_OBJ_FLAG_SCROLLABLE);
-    s->hud_badge_canvas = lv_canvas_create(lv_screen_active());
+    s->hud_badge_canvas = lv_canvas_create(parent);
     static uint8_t badge_buf[48 * 12 * 4];
     lv_canvas_set_buffer(s->hud_badge_canvas, badge_buf, 48, 12, LV_COLOR_FORMAT_ARGB8888);
     lv_obj_align(s->hud_badge_canvas, LV_ALIGN_TOP_RIGHT, -1, 4);

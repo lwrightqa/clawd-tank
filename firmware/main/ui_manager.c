@@ -22,6 +22,7 @@ typedef enum {
 } ui_state_t;
 
 #define SCENE_FULL_WIDTH   320
+#define SCENE_FULL_HEIGHT  172
 #define SCENE_NOTIF_WIDTH  107
 #define SCENE_ANIM_MS      400
 
@@ -153,15 +154,28 @@ void ui_manager_init(void)
 
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x0f1320), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+
+    /* The 320 x 172 layout lives in a panel centred on the display: at x 0 on a 320-wide screen (the simulator),
+     * at x 160 on the MiniBar bar's 640 x 172, with black either side. Everything in scene.c and notification_ui.c
+     * is sized and aligned inside its parent, so nothing else moves. */
+    lv_obj_t *panel = lv_obj_create(screen);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_size(panel, SCENE_FULL_WIDTH, SCENE_FULL_HEIGHT);
+    int32_t panel_x = (lv_display_get_horizontal_resolution(NULL) - SCENE_FULL_WIDTH) / 2;
+    lv_obj_set_pos(panel, panel_x > 0 ? panel_x : 0, 0);
+    lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x0f1320), 0);
 
     /* Create scene (left panel — starts full width) */
-    s_scene = scene_create(screen);
+    s_scene = scene_create(panel);
     scene_set_width(s_scene, SCENE_FULL_WIDTH, 0);
     scene_set_clawd_anim(s_scene, CLAWD_ANIM_DISCONNECTED);
 
     /* Create notification UI (right panel — starts hidden) */
-    s_notif_ui = notification_ui_create(screen);
+    s_notif_ui = notification_ui_create(panel);
 
     s_state = UI_STATE_DISCONNECTED;
     s_connected = false;
