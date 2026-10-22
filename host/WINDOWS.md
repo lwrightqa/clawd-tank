@@ -2,7 +2,7 @@
 
 The Python host (`host/`) runs on Windows without the macOS menu-bar app. Claude Code's hooks reach a background **daemon**, and the daemon drives the bar over Bluetooth LE. Tested with Windows 11, Python 3.10 and bleak 3.0.2 (its WinRT backend).
 
-**Most people want the tray app instead: [TRAY.md](TRAY.md).** `ClawdTank.exe` runs this same daemon in the background, puts Clawd in the notification area as its icon, installs the hooks after a Yes/No dialog, and can start with Windows, so no terminal and no commands are needed. Everything below is the command-line way, which stays supported (and is what the tray app is built on).
+**Most people want the tray app instead: [TRAY.md](TRAY.md).** `ClawdTank.exe` runs this same daemon in the background, puts a small still Clawd in the notification area (orange when the bar is connected, greyed when not, with a red dot on an error), installs the hooks after a Yes/No dialog, and can start with Windows, so no terminal and no commands are needed. Everything below is the command-line way, which stays supported (and is what the tray app is built on).
 
 ```
 Claude Code hook --> clawd-tank-notify.py --TCP 127.0.0.1:47421--> daemon --BLE--> the bar ("Clawd Tank")
