@@ -6,14 +6,14 @@ The upstream pipeline is svg2frames.py -> png2rgb565.py -> crop_sprites.py at 4 
 1.5x (6 px per unit) in a brighter orange, so this runs the same three tools at another scale, with one extra step
 between the first and the second: clawd_recolour.py repaints Clawd's orange body (props and eyes stay as they are).
 
-    py -3 tools/build_bar_sprites.py --out build/sprites                     # 1.5x, #FF7A3D, every animated sprite
+    py -3 tools/build_bar_sprites.py --out build/sprites                     # 1.5x, #F17D4A, every animated sprite
     py -3 tools/build_bar_sprites.py --out build/sprites --only typing,idle  # a few
     py -3 tools/build_bar_sprites.py --install                               # write into firmware/main/assets
 
-Defaults are what the firmware ships: scale 6, colour #FF7A3D (on the panel #FF7939: RGB565 cannot show more), and
-the "No connection" screen (disconnected) at scale 5, because its Bluetooth bubble does not fit the 172 px height at
-6. The HUD's small crab (sprite_mini_crab.h) is decoded from the header already in assets/, recoloured and written
-back. The y_offset values in scene.c follow the rule in the comment above anim_defs; this script reports the cropped
+Defaults are what the firmware ships: scale 6 for every sprite and the body colour in --colour (RGB565 cannot show
+every hex, so the nearest displayable value is used and printed). The "No connection" screen is drawn from
+assets/svg-animations/bar/clawd-disconnected-bar.svg: upstream's Bluetooth icon is too tall for Clawd at 1.5x. The
+HUD's small crab (sprite_mini_crab.h) is decoded from the header already in assets/, recoloured and written back. The y_offset values in scene.c follow the rule in the comment above anim_defs; this script reports the cropped
 rows that rule needs.
 
 Needs Playwright with Chromium (svg2frames.py), Pillow and numpy.
@@ -61,6 +61,9 @@ SPRITES = {
 }
 # conducting's particle stream has positive animation delays, so its first loop is half empty: sample one cycle later
 SEEK_OFFSET_MS = {"conducting": 2000}
+# sprites drawn from a bar-specific copy of the SVG (assets/svg-animations/bar/): the No connection screen's Bluetooth
+# icon is smaller and lower so that Clawd can be 1.5x like the others on the 172 px tall screen
+BAR_SVG = {"disconnected": SVG_DIR / "bar" / "clawd-disconnected-bar.svg"}
 
 
 def _render(job):
@@ -77,8 +80,12 @@ def _render(job):
         s.build_html_wrapper = patched
     svg, fps, dur = SPRITES[name]
     out = work / "frames" / name
-    saved, _, _ = s.render_frames(SVG_DIR / f"{svg}.svg", out, fps, dur, float(scale), "transparent")
-    return name, len(saved)
+    for attempt in range(3):
+        saved, _, _ = s.render_frames(BAR_SVG.get(name, SVG_DIR / f"{svg}.svg"), out, fps, dur, float(scale), "transparent")
+        # a browser that has not painted yet gives blank frames (seen with eight rendering at once): try again
+        if any(Image.open(p).convert("RGBA").getchannel("A").getbbox() for p in saved):
+            return name, len(saved)
+    raise RuntimeError(f"{name}: three renders in a row gave blank frames")
 
 
 def _convert(job):
@@ -98,6 +105,8 @@ def _convert(job):
         raise RuntimeError(f"png2rgb565 failed for {name}: {r.stdout[-300:]} {r.stderr[-300:]}")
     import crop_sprites
     res = crop_sprites.process_sprite(hdr, dry_run=False)
+    if res.get("skipped"):
+        raise RuntimeError(f"{name}: nothing to crop ({res.get('reason')}); refusing to leave a blank sprite behind")
     # the tools write native line endings; the repo is LF
     hdr.write_bytes(hdr.read_bytes().replace(b"\r\n", b"\n"))
     return name, res
@@ -150,8 +159,8 @@ def main():
     ap.add_argument("--work", type=Path, default=REPO / "build" / "sprite-work", help="frames and scratch files")
     ap.add_argument("--install", action="store_true", help="write into firmware/main/assets")
     ap.add_argument("--scale", type=int, default=6, help="px per SVG unit (4 = upstream's size, 6 = 1.5x)")
-    ap.add_argument("--disconnected-scale", type=int, default=5, help="px per unit for the No connection screen")
-    ap.add_argument("--colour", default="#FF7A3D", help="body colour; 'none' keeps upstream's salmon")
+    ap.add_argument("--disconnected-scale", type=int, default=6, help="px per unit for the No connection screen")
+    ap.add_argument("--colour", default="#F17D4A", help="body colour; 'none' keeps upstream's salmon")
     ap.add_argument("--only", default="", help="comma-separated sprite names (default: all)")
     ap.add_argument("--skip-mini-crab", action="store_true")
     args = ap.parse_args()
@@ -179,9 +188,9 @@ def main():
         r = results[n]
         print(f"  {n:13s} {r['new_w']:>3d}x{r['new_h']:<3d} {r['bottom_removed']:>4d}")
     if not args.skip_mini_crab and target is not None:
-        src = ASSETS / "sprite_mini_crab.h"
+        src = HERE / "upstream_sprites" / "sprite_mini_crab.h"   # upstream's own, so a rebuild never recolours a recolour
         w, h = recolour_mini_crab(src, out_dir / "sprite_mini_crab.h", target, work)
-        print(f"  mini_crab     {w}x{h} recoloured from {src.name}")
+        print(f"  mini_crab     {w}x{h} recoloured from tools/upstream_sprites/{src.name}")
     json.dump(results, open(work / "crop.json", "w"), indent=1)
     print(f"done in {time.time() - t0:.0f} s; crop data in {work / 'crop.json'}")
 
