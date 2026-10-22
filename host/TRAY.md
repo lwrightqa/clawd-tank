@@ -56,7 +56,7 @@ Tick **Start with Windows** in the tray menu. It writes the value `ClawdTank` un
 
 | What | Where |
 | --- | --- |
-| The log | `%LOCALAPPDATA%\ClawdTank\tray.log` (1 MB each, 3 older files kept as `tray.log.1` ... `.3`); it also carries the daemon's own lines (`Socket msg`, `Display: anims=[...]`, `Connected to Clawd Tank`) |
+| The log | `%LOCALAPPDATA%\ClawdTank\tray.log` (1 MB each, 3 older files kept as `tray.log.1` ... `.3`); it also carries the daemon's own lines (`Socket msg`, `Display: anims=[...]`, `Connected to Clawd Tank`). Windows cannot rename a file another program has open: if Notepad (after **Open log**), an editor or a `tail` still has `tray.log` open when it is full, the app keeps writing into it, notes `Could not rotate ...` in it, and tries again 30 s later, so the file can run a little past 1 MB but never goes quiet |
 | The app's state | `%LOCALAPPDATA%\ClawdTank\state.json` (only: you said No to the hooks question) |
 | The daemon's state | `%USERPROFILE%\.clawd-tank\` (`daemon.pid`, `daemon.lock`, `sessions.json`, the notify script), as with the terminal daemon |
 | Hooks | `%USERPROFILE%\.claude\settings.json` |

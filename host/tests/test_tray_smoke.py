@@ -117,9 +117,11 @@ class Run:
         except OSError:
             return ""
 
-    def start(self):
+    def start(self, *flags):
+        """Launch with `flags` (default: --minimized --no-prompt)."""
         self.proc = subprocess.Popen(
-            self.command + ["--minimized", "--no-prompt"], env=self.env, cwd=str(HOST),
+            self.command + list(flags or ("--minimized", "--no-prompt")), env=self.env,
+            cwd=str(HOST),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return self.proc
 
@@ -211,6 +213,57 @@ def test_app_starts_serves_hooks_and_quits(command, tmp_path):
     finally:
         run.cleanup()
     assert real_state() == before, "the run touched the user's real files"
+
+
+def started_the_way_the_user_does(run: Run):
+    """`ClawdTank.exe --minimized` and nothing else: no --no-prompt on the command
+    line (the temp Claude folder has no hooks, so the environment says no-prompt
+    instead, or a Yes/No box would open), no --selftest. Then one hook message over
+    TCP, as the notify script sends it."""
+    proc = run.start("--minimized")
+    assert wait_until(lambda: "Engine started" in run.log_text(), 10), run.log_text()
+    assert wait_until(lambda: listening(run.port), 10), run.log_text()
+    run.send({"event": "dismiss", "hook": "UserPromptSubmit",
+              "session_id": "user-launch", "project": "userlike"})
+    assert wait_until(lambda: "Socket msg: event=dismiss hook=UserPromptSubmit" in run.log_text(),
+                      10), run.log_text()
+    return proc
+
+
+@pytest.mark.parametrize("command", LAUNCHERS)
+def test_started_as_the_user_does_it_the_log_has_the_engine_and_the_hook_lines(command, tmp_path):
+    """The regression that went unseen: the app ran and served hooks while its
+    log stayed empty. Both the engine-started line and the Socket msg line for a
+    message sent over TCP must be in the log file within 10 s."""
+    run = Run(command, tmp_path)
+    try:
+        proc = started_the_way_the_user_does(run)
+        text = run.log_text()
+        assert "Clawd Tank is running" in text and "Tray icon: idle" in text
+        assert run.control("--quit") == 0
+        assert proc.wait(timeout=15) == 0
+    finally:
+        run.cleanup()
+
+
+@pytest.mark.parametrize("command", LAUNCHERS)
+def test_a_nearly_full_log_that_another_program_holds_open_does_not_silence_the_app(command, tmp_path):
+    """The log sits just under its 1 MB limit and something (Notepad after Open
+    log, an editor, a tail) has it open, so it cannot be rotated. The standard
+    rotating handler dropped every line then; the app must log regardless."""
+    run = Run(command, tmp_path)
+    run.log.parent.mkdir(parents=True)
+    run.log.write_bytes((b"old log line " + b"x" * 86 + b"\n") * 9999)   # 999,900 bytes
+    with open(run.log, "rb"):
+        try:
+            proc = started_the_way_the_user_does(run)
+            assert wait_until(lambda: "Could not rotate" in run.log_text(), 5), run.log_text()[-600:]
+            assert not (run.log.parent / "tray.log.1").exists()   # it could not, and said so
+            assert run.control("--quit") == 0
+            assert proc.wait(timeout=15) == 0
+            assert "Clawd Tank exited" in run.log_text()          # even the last line landed
+        finally:
+            run.cleanup()
 
 
 @pytest.mark.parametrize("command", LAUNCHERS)

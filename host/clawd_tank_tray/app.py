@@ -117,10 +117,7 @@ class TrayApp:
         self.root.report_callback_exception = tk_exception_handler(self.errors)
         self.dialogs = Dialogs(self.root)
         scale = self.root.winfo_fpixels("1i") / 96.0
-        self.window = MainWindow(self.root, self.icons, {
-            "install": self.install_hooks, "open_log": self.open_log,
-            "hide": self.window_hide, "quit": self.quit, "retry": self.retry,
-        }, scale)
+        self.window = MainWindow(self.root, self.icons, self._window_actions(), scale)
         self._tray_size = tray_icon_size()
         logger.info("Clawd Tank %s starting (pid %d, tray icon %dpx, ui scale %.2f)",
                     __version__, os.getpid(), self._tray_size, scale)
@@ -153,6 +150,11 @@ class TrayApp:
             self._cleanup()
         logger.info("Clawd Tank exited")
         return 0
+
+    def _window_actions(self) -> dict:
+        """What the window's buttons do (the tray menu posts the same actions)."""
+        return {"install": self.install_hooks, "open_log": self.open_log,
+                "hide": self.window_hide, "quit": self.quit, "retry": self.retry}
 
     def _cleanup(self) -> None:
         """However the main loop ended (Quit, or a crash): the tray icon goes, the
