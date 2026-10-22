@@ -2,6 +2,8 @@
 
 The Python host (`host/`) runs on Windows without the macOS menu-bar app. Claude Code's hooks reach a background **daemon**, and the daemon drives the bar over Bluetooth LE. Tested with Windows 11, Python 3.10 and bleak 3.0.2 (its WinRT backend).
 
+**Most people want the tray app instead: [TRAY.md](TRAY.md).** `ClawdTank.exe` runs this same daemon in the background, puts Clawd in the notification area as its icon, installs the hooks after a Yes/No dialog, and can start with Windows, so no terminal and no commands are needed. Everything below is the command-line way, which stays supported (and is what the tray app is built on).
+
 ```
 Claude Code hook --> clawd-tank-notify.py --TCP 127.0.0.1:47421--> daemon --BLE--> the bar ("Clawd Tank")
 ```
@@ -109,13 +111,13 @@ State lives in `%USERPROFILE%\.clawd-tank\`: `daemon.pid`, `daemon.lock`, `sessi
 
 ## Not available on Windows
 
-- The **menu-bar app** (`clawd_tank_menubar`: `rumps`, the status icon, brightness slider, transport menus) and **launch at login** through launchd. Only the hook-installer logic in `clawd_tank_menubar/hooks.py` is shared, and it imports nothing macOS-specific. Start the daemon yourself, or add your own Task Scheduler entry that runs `<repo>\host\.venv-host\Scripts\python.exe -m clawd_tank_daemon --log-file ...` at logon; none is provided.
+- The **menu-bar app** (`clawd_tank_menubar`: `rumps`, the status icon, brightness slider, transport menus) and **launch at login** through launchd. Only the hook-installer logic in `clawd_tank_menubar/hooks.py` is shared, and it imports nothing macOS-specific. On Windows the equivalent is the tray app ([TRAY.md](TRAY.md): the tray icon, and a *Start with Windows* checkbox); without it, start the daemon yourself, or add your own Task Scheduler entry that runs `<repo>\host\.venv-host\Scripts\python.exe -m clawd_tank_daemon --log-file ...` at logon.
 - The **bundled simulator** (`.app`, `pkill`-based cleanup) is macOS only. The daemon's `--sim` options are untested on Windows.
 - The **repo script** `host/clawd-tank-notify` (which can also start the daemon on the first hook) works on Windows as `py -3 <path>\clawd-tank-notify`, but it starts the daemon with whichever Python runs it, which usually does not have `bleak`. The installer therefore uses the standalone copy, which never starts the daemon.
 
 ## Troubleshooting
 
-- **`Cannot listen on 127.0.0.1:47421`**: another daemon, or another program, has the port. Close the other daemon, or pick a free port for both sides with `CLAWD_TANK_TCP_PORT`.
+- **`Cannot listen on 127.0.0.1:47421`**: another daemon, or another program, has the port. Close the other daemon, or pick a free port for both sides with `CLAWD_TANK_TCP_PORT`. (The tray app shows the same thing as a red dot on Clawd and *Another Clawd Tank daemon is running; close it.*; close the other one and click Retry.)
 - **Claude Code feels slower while the daemon is stopped.** A hook that finds nobody listening gives up after 0.3 seconds. (Windows needs about 2 seconds to report a refused loopback connection, which would be felt on every tool call, so the hooks do not wait for it.) Start the daemon, or remove the hooks.
 - **Windows Firewall asks about `python.exe`.** It should not: the listener is bound to 127.0.0.1 only, and loopback traffic is not filtered by default. If it does ask, Cancel or deny; nothing outside this computer needs access.
 - **Two `python.exe` entries in Task Manager** for one daemon are normal: a venv's `python.exe` on Windows starts the real interpreter as a child.
