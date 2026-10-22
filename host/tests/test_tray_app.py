@@ -1,5 +1,6 @@
 """TrayApp's decisions without a window: the hooks consent flow, Start with
-Windows, the tray menu, and how engine events reach the state. A fake stands in
+Windows, the tray menu, how engine events reach the state, and that the tray icon
+is a still picture that changes with the connection and nothing else. A fake stands in
 for the dialogs; settings.json, the notify script, the registry key and the state
 file are all temporary."""
 
@@ -18,7 +19,7 @@ from clawd_tank_tray.autostart import Autostart
 from clawd_tank_tray.config import AppConfig
 from clawd_tank_tray.hookctl import HookManager
 from clawd_tank_tray.options import Options
-from clawd_tank_tray.state import EngineStatus
+from clawd_tank_tray.state import ICON_NAMES, EngineStatus
 
 
 class FakeDialogs:
@@ -238,7 +239,7 @@ def test_menu_checkbox_reads_the_registry_each_time(ctx):
 
 def test_menu_status_line_follows_the_state_and_retry_appears_on_errors(ctx):
     ctx.view.apply("status", {"status": "conflict", "message": "x"})
-    ctx._status_line = ctx.view.tooltip().removeprefix("Clawd Tank: ")
+    ctx._status_line = ctx.view.status_text()
     ctx._can_retry = ctx.view.can_retry
     texts = [i.text for i in menu_items(ctx)]
     assert "Retry" in texts
@@ -270,8 +271,176 @@ def test_engine_events_fold_into_the_view(ctx):
         except queue.Empty:
             break
         dirty |= ctx._handle(kind, payload)
-    assert dirty and ctx.view.sprite() == "building" and ctx.view.bar_text() == "Connected"
+    assert dirty and ctx.view.icon_name() == "idle" and ctx.view.bar_text() == "Connected"
+    assert ctx.view.sessions == 1
     assert ctx._handle("engine", ("notifications", {"count": 2})) is False  # nothing to redraw
+    assert ctx._handle("engine", ("oneshot", {"anim": "sweeping"})) is False  # no animation to start
+    assert ctx._queue.empty()
+
+
+# --- the tray icon: still, by connection state -----------------------------------------------------
+
+
+class RecordingTray:
+    """Stands in for the pystray icon and counts what is sent to the shell."""
+
+    def __init__(self, icon):
+        self._icon, self._title = icon, "Clawd Tank"
+        self.icon_updates, self.title_updates = [], []
+
+    @property
+    def icon(self):
+        return self._icon
+
+    @icon.setter
+    def icon(self, value):
+        self._icon = value
+        self.icon_updates.append(value)
+
+    @property
+    def title(self):
+        return self._title
+
+    @title.setter
+    def title(self, value):
+        self._title = value
+        self.title_updates.append(value)
+
+
+class FakeWindow:
+    visible = False
+
+    def __init__(self):
+        self.renders = 0
+
+    def render(self, view, hooks_text, hooks_warning):
+        self.renders += 1
+
+
+class NoTimerRoot:
+    def after(self, *args, **kwargs):
+        raise AssertionError(f"a timer was scheduled: {args}")
+
+    after_cancel = after
+
+
+@pytest.fixture
+def live(ctx):
+    """The app with its real refresh(), a recording tray, a fake window, and a
+    root that refuses every timer."""
+    del ctx.refresh                       # back to TrayApp.refresh
+    ctx.root, ctx.window = NoTimerRoot(), FakeWindow()
+    ctx._tray_size = 16
+    ctx._icon_name = ctx.view.icon_name()
+    ctx.tray = RecordingTray(ctx.icons.icon(ctx._icon_name, 16))
+    return ctx
+
+
+def feed(app, name, payload):
+    """What _pump does with one engine event."""
+    if app._handle("engine", (name, payload)):
+        app.refresh()
+
+
+def test_the_icon_follows_the_connection_and_each_picture_is_the_cached_one(live):
+    icons, tray = live.icons, live.tray
+    assert tray.icon is icons.icon("grey", 16)            # not started: greyed
+    feed(live, "status", {"status": "running"})
+    assert tray.icon is icons.icon("grey", 16) and tray.icon_updates == []   # scanning: still grey
+    feed(live, "connection", {"connected": True})
+    assert tray.icon is icons.icon("idle", 16) and len(tray.icon_updates) == 1
+    feed(live, "connection", {"connected": False})
+    assert tray.icon is icons.icon("grey", 16) and len(tray.icon_updates) == 2
+    feed(live, "status", {"status": "conflict", "message": "x"})
+    assert tray.icon is icons.icon("error", 16) and len(tray.icon_updates) == 3
+    feed(live, "status", {"status": "running"})
+    feed(live, "connection", {"connected": True})
+    assert tray.icon is icons.icon("idle", 16)            # the very same object: one native handle
+    assert len({id(icons.icon(n, 16)) for n in ICON_NAMES}) == 3
+
+
+def test_connected_shows_the_same_image_whatever_claude_is_doing(live):
+    feed(live, "status", {"status": "running"})
+    feed(live, "connection", {"connected": True})
+    connected = live.tray.icon
+    assert connected is live.icons.icon("idle", 16)
+    updates = len(live.tray.icon_updates)
+    for anim in ("thinking", "typing", "debugger", "building", "conducting", "wizard", "beacon",
+                 "confused", "sweeping", "happy", "alert", "dizzy", "idle"):
+        feed(live, "display", {"state": {"anims": [anim], "ids": [0]}})
+        assert live.tray.icon is connected
+    feed(live, "display", {"state": {"status": "sleeping"}})
+    assert live.tray.icon is connected
+    assert len(live.tray.icon_updates) == updates, "a display event must not update the icon"
+
+
+def test_display_and_hook_events_send_nothing_to_the_notification_area(live):
+    feed(live, "status", {"status": "running"})
+    feed(live, "connection", {"connected": True})
+    icon_updates, title_updates = len(live.tray.icon_updates), len(live.tray.title_updates)
+    renders = live.window.renders
+    for n in range(20):
+        feed(live, "display", {"state": {"anims": ["thinking", "typing"][: n % 3], "ids": [0, 1]}})
+        feed(live, "hook", {"msg": {"event": "tool_use", "tool_name": "Bash", "project": "p"}})
+    assert len(live.tray.icon_updates) == icon_updates
+    assert len(live.tray.title_updates) == title_updates, "the tooltip follows the connection too"
+    assert live.window.renders > renders                  # the window text still follows
+
+
+def test_greyed_has_no_colour_and_error_has_the_red_dot(live):
+    grey = live.icons.icon("grey", 24)
+    raw = grey.tobytes()
+    assert all(r == g == b for r, g, b, a in zip(raw[0::4], raw[1::4], raw[2::4], raw[3::4]) if a)
+    err = live.icons.icon("error", 24)
+    r, g, b, a = err.getpixel((24 - 6, 24 - 6))
+    assert a == 255 and r > 200 and g < 80 and b < 80
+    idle = live.icons.icon("idle", 24)
+    assert idle.getpixel((24 - 6, 24 - 6)) != err.getpixel((24 - 6, 24 - 6))
+
+
+def test_no_animation_timer_is_ever_scheduled(live):
+    # NoTimerRoot raises on any after(); drive every kind of event through
+    for name, payload in (("status", {"status": "starting"}), ("status", {"status": "running"}),
+                          ("connection", {"connected": True}),
+                          ("display", {"state": {"anims": ["alert"], "ids": [0]}}),
+                          ("oneshot", {"anim": "sweeping"}),
+                          ("hook", {"msg": {"event": "x"}}),
+                          ("connection", {"connected": False}),
+                          ("status", {"status": "error", "message": "boom"})):
+        feed(live, name, payload)
+    live.refresh()
+    for gone in ("_tick", "_cancel_anim", "_show_frame", "_anim_job", "_frame", "_sprite"):
+        assert not hasattr(live, gone), gone
+
+
+def test_the_menu_says_what_is_going_on_in_words(live):
+    def lines():
+        return [i.text for i in menu_items(live)]
+
+    feed(live, "status", {"status": "running"})
+    assert "Scanning for the bar..." in lines()
+    feed(live, "connection", {"connected": True})
+    assert "Connected to Clawd Tank" in lines()
+    assert not any(t.startswith("Last event") for t in lines())   # none yet: no line
+    feed(live, "hook", {"msg": {"event": "tool_use", "tool_name": "Bash", "project": "demo"}})
+    feed(live, "display", {"state": {"anims": ["building"], "ids": [0]}})
+    texts = lines()
+    assert "Connected to Clawd Tank" in texts                      # what Claude does is not in it
+    assert any(t.startswith("Last event: tool_use Bash in demo, ") for t in texts)
+    feed(live, "status", {"status": "conflict", "message": "x"})
+    assert any("Another Clawd Tank daemon is running" in t for t in lines())
+    assert "Retry" in lines()
+
+
+def test_the_tooltip_is_set_when_the_connection_changes_and_not_otherwise(live):
+    feed(live, "status", {"status": "running"})
+    feed(live, "connection", {"connected": True})
+    assert live.tray.title_updates[-1] == "Clawd Tank: Connected to Clawd Tank"
+    n = len(live.tray.title_updates)
+    feed(live, "hook", {"msg": {"event": "x"}})
+    assert len(live.tray.title_updates) == n
+    feed(live, "connection", {"connected": False})
+    assert live.tray.title_updates[-1] == "Clawd Tank: Scanning for the bar..."
 
 
 def test_open_log_opens_the_log_in_local_app_data(ctx, monkeypatch, tmp_path):

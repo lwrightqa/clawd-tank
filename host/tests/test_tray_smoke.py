@@ -1,8 +1,10 @@
 """Headless smoke test of the whole tray app, as a real process.
 
 It runs the app from source (``python -m clawd_tank_tray``) and, if it has been
-built, the packaged ``host/tray/dist/ClawdTank/ClawdTank.exe``. Both are fully
-isolated from the user's real setup:
+built, the packaged ``host/tray/dist/ClawdTank/ClawdTank.exe`` (or the exe that
+``CLAWD_TANK_TEST_EXE`` names, e.g. a staged build in ``host/tray/dist-next``; the
+value ``none`` skips the exe run). Both are fully isolated from the user's real
+setup:
 
 * ``CLAWD_TANK_NO_BLE=1``: no Bluetooth transport, so the bar is never touched;
 * ``CLAWD_TANK_TCP_PORT``: a free port, never 47421;
@@ -29,7 +31,9 @@ from pathlib import Path
 import pytest
 
 HOST = Path(__file__).resolve().parent.parent
-EXE = HOST / "tray" / "dist" / "ClawdTank" / "ClawdTank.exe"
+_EXE_OVERRIDE = os.environ.get("CLAWD_TANK_TEST_EXE", "")
+EXE = (Path(_EXE_OVERRIDE) if _EXE_OVERRIDE and _EXE_OVERRIDE.lower() != "none"
+       else HOST / "tray" / "dist" / "ClawdTank" / "ClawdTank.exe")
 REAL_HOME = Path.home()
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="the tray app is Windows only")
@@ -139,7 +143,7 @@ class Run:
 
 
 LAUNCHERS = [pytest.param([sys.executable, "-m", "clawd_tank_tray"], id="source")]
-if EXE.exists():
+if EXE.exists() and _EXE_OVERRIDE.lower() != "none":
     LAUNCHERS.append(pytest.param([str(EXE)], id="exe"))
 else:
     LAUNCHERS.append(pytest.param([str(EXE)], id="exe", marks=pytest.mark.skip(
@@ -161,6 +165,8 @@ def test_app_starts_serves_hooks_and_quits(command, tmp_path):
         assert wait_until(lambda: "Engine started" in run.log_text(), 5), run.log_text()
         assert wait_until(lambda: "Tray icon ready" in run.log_text(), 10), run.log_text()
         assert "Clawd Tank is running" in run.log_text()
+        # no Bluetooth to wait for: the icon is the connected one, and it is set once
+        assert wait_until(lambda: "Tray icon: idle" in run.log_text(), 10), run.log_text()
 
         # the daemon wrote its lock and PID into the temp home, not the real one
         pid_file = run.home / ".clawd-tank" / "daemon.pid"
@@ -172,6 +178,16 @@ def test_app_starts_serves_hooks_and_quits(command, tmp_path):
                   "session_id": "smoke-session", "project": "smoke"})
         assert wait_until(lambda: "Display: anims=['thinking']" in run.log_text(), 5), run.log_text()
         assert "Socket msg: event=dismiss hook=UserPromptSubmit" in run.log_text()
+
+        # what Claude does is text only: more events, and the icon is not touched
+        icon_changes = run.log_text().count("Tray icon: ")
+        for tool in ("Bash", "Edit", "Read"):
+            run.send({"event": "tool_use", "session_id": "smoke-session", "tool_name": tool,
+                      "project": "smoke"})
+        assert wait_until(lambda: run.log_text().count("Socket msg: event=tool_use") >= 3, 5), (
+            run.log_text())
+        time.sleep(1.0)   # ten pump cycles
+        assert run.log_text().count("Tray icon: ") == icon_changes, run.log_text()
 
         # a second launch exits at once, leaves the first one running, and makes
         # it show its window (as does --show)

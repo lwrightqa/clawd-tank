@@ -1,0 +1,40 @@
+{
+  "sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64
+  ],
+  "ico_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    256
+  ],
+  "transparent_key": "0x18C5",
+  "shrink": "mode",
+  "icons": [
+    "idle",
+    "grey",
+    "error"
+  ],
+  "source": {
+    "source": "sprite_idle.h",
+    "source_frames": 96,
+    "frame": 0,
+    "bbox": [
+      9,
+      17,
+      99,
+      77
+    ],
+    "master": 90
+  }
+}

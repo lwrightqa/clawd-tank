@@ -1,4 +1,4 @@
-"""The native tray icon pieces: HICON from a frame, the handle cache, the pystray subclass."""
+"""The native tray icon pieces: HICON from a picture, the handle cache, the pystray subclass."""
 
 import ctypes
 import sys
@@ -56,9 +56,9 @@ def icon_size_and_depth(hicon):
 
 
 @pytest.mark.parametrize("size", [16, 20, 24, 32])
-def test_hicon_has_exactly_the_size_of_the_frame_so_windows_does_not_rescale(size):
-    frame = IconSet().frame("idle", 0, size)
-    hicon = hicon_from_image(frame)
+def test_hicon_has_exactly_the_size_of_the_picture_so_windows_does_not_rescale(size):
+    picture = IconSet().icon("idle", size)
+    hicon = hicon_from_image(picture)
     try:
         assert hicon
         assert icon_size_and_depth(hicon) == (size, size, 32)
@@ -85,13 +85,14 @@ def test_hicon_keeps_the_alpha_channel():
         destroy_hicon(hicon)
 
 
-def test_cache_makes_one_handle_per_image_and_clears():
+def test_cache_makes_one_handle_per_state_and_clears():
     icons = IconSet()
     cache = HiconCache()
-    a, b = icons.frame("thinking", 0, 16), icons.frame("thinking", 1, 16)
-    ha = cache.get(a)
-    assert cache.get(a) == ha and cache.get(icons.frame("thinking", 0, 16)) == ha  # same object
-    assert cache.get(b) != ha and len(cache) == 2
+    idle, grey, error = (icons.icon(n, 16) for n in ("idle", "grey", "error"))
+    handle = cache.get(idle)
+    assert cache.get(idle) == handle and cache.get(icons.icon("idle", 16)) == handle  # same object
+    assert cache.get(grey) != handle and cache.get(error) not in (handle, cache.get(grey))
+    assert len(cache) == 3
     cache.clear()
     assert len(cache) == 0
 
@@ -100,19 +101,24 @@ def test_a_picture_swap_uses_the_cache_not_a_file(monkeypatch):
     """pystray's own path writes a temp .ico per change; this one must not."""
     icons = IconSet()
     cache = HiconCache()
-    icon = ClawdTrayIcon("t", icon=icons.frame("thinking", 0, 16), title="x", hicons=cache)
+    icon = ClawdTrayIcon("t", icon=icons.icon("idle", 16), title="x", hicons=cache)
     written = []
     monkeypatch.setattr(_backend, "serialized_image",
                         lambda *a, **k: written.append(a) or (_ for _ in ()).throw(AssertionError("temp file")),
                         raising=False)
     icon._assert_icon_handle()
     first = icon._icon_handle
-    assert first == cache.get(icons.frame("thinking", 0, 16))
+    assert first == cache.get(icons.icon("idle", 16))
     icon._release_icon()
     assert icon._icon_handle is None and len(cache) == 1  # released, but not destroyed
-    icon._icon = icons.frame("thinking", 1, 16)
+    icon._icon = icons.icon("grey", 16)
     icon._assert_icon_handle()
     assert icon._icon_handle != first and len(cache) == 2
+    # and back: the first handle is found again, nothing new is made
+    icon._release_icon()
+    icon._icon = icons.icon("idle", 16)
+    icon._assert_icon_handle()
+    assert icon._icon_handle == first and len(cache) == 2
     assert written == []
     cache.clear()
 
@@ -121,14 +127,14 @@ def test_left_click_runs_the_default_item():
     opened = threading.Event()
     menu = pystray.Menu(pystray.MenuItem("Open", lambda: opened.set(), default=True),
                         pystray.MenuItem("Quit", lambda: None))
-    icon = ClawdTrayIcon("t", icon=IconSet().frame("idle", 0, 16), title="x", menu=menu)
+    icon = ClawdTrayIcon("t", icon=IconSet().icon("idle", 16), title="x", menu=menu)
     icon._on_notify(0, _backend.win32.WM_LBUTTONUP)
     assert opened.is_set()
     icon._hicons.clear()
 
 
 def test_right_click_refreshes_the_menu_before_it_opens(monkeypatch):
-    icon = ClawdTrayIcon("t", icon=IconSet().frame("idle", 0, 16), title="x",
+    icon = ClawdTrayIcon("t", icon=IconSet().icon("idle", 16), title="x",
                          menu=pystray.Menu(pystray.MenuItem("A", lambda: None)))
     order = []
     monkeypatch.setattr(icon, "update_menu", lambda: order.append("update_menu"))

@@ -1,4 +1,4 @@
-"""The Clawd icons: built from clawd-tank's sprite headers, read from PNG at run time."""
+"""The three tray icons: built from clawd-tank's sprite header, read from PNG at run time."""
 
 import json
 import struct
@@ -9,8 +9,8 @@ import pytest
 from PIL import Image
 
 from clawd_tank_tray import icons as icons_mod
-from clawd_tank_tray.icons import SIZES, SPRITES, IconSet, nearest_size
-from clawd_tank_tray.state import ANIM_SPRITES
+from clawd_tank_tray.icons import SIZES, IconSet, nearest_size
+from clawd_tank_tray.state import ICON_NAMES
 
 HOST = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOST / "tray"))
@@ -18,8 +18,6 @@ import make_icons  # noqa: E402  (the build script, host/tray/make_icons.py)
 
 ASSETS = HOST / "clawd_tank_tray" / "assets"
 HEADERS = HOST.parent / "firmware" / "main" / "assets"
-
-STILL = {"idle", "sleeping", "grey", "error"}
 
 
 @pytest.fixture(scope="module")
@@ -46,68 +44,52 @@ def opaque(img: Image.Image) -> int:
 # --- sizes ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", SPRITES)
+@pytest.mark.parametrize("name", ICON_NAMES)
 @pytest.mark.parametrize("size", SIZES)
-def test_every_sprite_has_square_non_empty_frames_at_every_size(icons, name, size):
-    count = icons.frame_count(name)
-    assert count >= 1
-    for i in range(count):
-        frame = icons.frame(name, i, size)
-        assert frame.size == (size, size) and frame.mode == "RGBA"
-        assert opaque(frame) > 0, f"{name} frame {i} at {size}px is empty"
+def test_every_icon_has_a_square_non_empty_picture_at_every_size(icons, name, size):
+    image = icons.icon(name, size)
+    assert image.size == (size, size) and image.mode == "RGBA"
+    assert opaque(image) > 0, f"{name} at {size}px is empty"
 
 
-def test_frame_counts_are_the_same_at_every_size(icons):
-    for name in SPRITES:
-        assert {len(icons._strip(name, s)) for s in SIZES} == {icons.frame_count(name)}
+def test_the_same_picture_object_comes_back_so_one_handle_serves_a_state(icons):
+    assert icons.icon("idle", 24) is icons.icon("idle", 24)
+    assert icons.icon("idle", 24) is not icons.icon("grey", 24)
+    assert len({id(icons.icon(n, 16)) for n in ICON_NAMES}) == 3
 
 
-def test_still_and_animated_sprites(icons):
-    for name in SPRITES:
-        if name in STILL:
-            assert icons.frame_count(name) == 1 and not icons.is_animated(name)
-        else:
-            assert icons.frame_count(name) >= 6 and icons.is_animated(name), name
+def test_an_unknown_icon_or_size_is_refused(icons):
+    with pytest.raises(KeyError):
+        icons.icon("thinking", 16)
+    with pytest.raises(OSError):
+        icons.icon("idle", 17)
 
 
-def test_animation_frame_counts_match_the_manifest(icons):
-    manifest = json.loads((ASSETS / "frames.json").read_text(encoding="utf-8"))
+def test_only_what_is_used_is_shipped():
+    """The three pictures at the built sizes, the .ico and the manifest: no
+    per-animation frames, no strips."""
+    files = {p.relative_to(ASSETS).as_posix() for p in ASSETS.rglob("*") if p.is_file()}
+    expected = {f"icons/{n}-{s}.png" for n in ICON_NAMES for s in SIZES}
+    expected |= {"clawd.ico", "icons.json"}
+    assert files == expected
+    for png in (ASSETS / "icons").glob("*.png"):
+        with Image.open(png) as im:
+            assert im.width == im.height, f"{png.name} is a strip, not one picture"
+
+
+def test_manifest_matches_the_assets():
+    manifest = json.loads((ASSETS / "icons.json").read_text(encoding="utf-8"))
     assert manifest["sizes"] == list(SIZES)
-    for name in SPRITES:
-        assert len(manifest["sprites"][name]["kept"]) == icons.frame_count(name), name
-    # and each kept frame is a distinct index of the source animation
-    for name, meta in manifest["sprites"].items():
-        kept = meta["kept"]
-        assert kept == sorted(set(kept))
-        if "source_frames" in meta:
-            assert all(0 <= i < meta["source_frames"] for i in kept)
-
-
-@pytest.mark.parametrize("name", sorted(set(SPRITES) - STILL))
-def test_animation_frames_actually_differ(icons, name):
-    frames = [icons.frame(name, i, 32).tobytes() for i in range(icons.frame_count(name))]
-    assert len(set(frames)) > 1, f"{name} would look frozen"
-
-
-def test_frames_wrap_around(icons):
-    n = icons.frame_count("thinking")
-    assert icons.frame("thinking", n, 24) is icons.frame("thinking", 0, 24)
-    assert icons.frame("thinking", 0, 24) is icons.frame("thinking", 0, 24)  # cached object
-
-
-def test_png_bytes_round_trip(icons):
-    import io
-    data = icons.png("typing", 2, 48)
-    im = Image.open(io.BytesIO(data)).convert("RGBA")
-    assert im.size == (48, 48)
-    assert im.tobytes() == icons.frame("typing", 2, 48).tobytes()
+    assert manifest["icons"] == list(ICON_NAMES)
+    assert manifest["source"]["source"] == "sprite_idle.h"
+    assert manifest["source"]["frame"] == 0
 
 
 # --- the variants ---------------------------------------------------------------------
 
 
 def test_greyed_variant_differs_is_grey_and_translucent(icons):
-    idle, grey = icons.frame("idle", 0, 32), icons.frame("grey", 0, 32)
+    idle, grey = icons.icon("idle", 32), icons.icon("grey", 32)
     assert idle.tobytes() != grey.tobytes()
     px = [p for p in pixels(grey) if p[3] > 0]
     assert px and all(r == g == b for r, g, b, _a in px), "greyed Clawd must be desaturated"
@@ -116,19 +98,19 @@ def test_greyed_variant_differs_is_grey_and_translucent(icons):
 
 
 def test_error_variant_is_clawd_with_a_red_dot_in_the_corner(icons):
-    idle, err = icons.frame("idle", 0, 32), icons.frame("error", 0, 32)
+    idle, err = icons.icon("idle", 32), icons.icon("error", 32)
     assert idle.tobytes() != err.tobytes()
     r, g, b, a = err.getpixel((32 - 6, 32 - 6))
     assert a == 255 and r > 200 and g < 80 and b < 80, "a red dot, bottom right"
     # the rest of Clawd is still there
     assert err.getpixel((16, 12)) == idle.getpixel((16, 12)) or opaque(err) >= opaque(idle)
     # also at the smallest size
-    r, g, b, a = icons.frame("error", 0, 16).getpixel((12, 12))
+    r, g, b, a = icons.icon("error", 16).getpixel((12, 12))
     assert a == 255 and r > 200 and g < 80
 
 
 def test_idle_is_the_orange_clawd(icons):
-    px = [p for p in pixels(icons.frame("idle", 0, 64)) if p[3] == 255]
+    px = [p for p in pixels(icons.icon("idle", 64)) if p[3] == 255]
     r, g, b, _ = max(set(px), key=px.count)  # the body colour
     assert r > 180 and 90 < g < 150 and b < 120
 
@@ -195,10 +177,10 @@ def test_decoder_agrees_with_the_real_header_it_reads():
     assert pixels(sp.frame(0))[0][3] == 0
 
 
-def test_every_sprite_the_app_shows_decodes_with_a_sound_header():
-    for name in make_icons.KEEP:
-        sp = make_icons.load_sprite(name, HEADERS)  # raises on a bad offset table
-        assert sp.frame_count >= 1 and sp.frame(0).getchannel("A").getbbox()
+def test_the_sprite_the_icons_are_made_from_decodes_with_a_sound_header():
+    sp = make_icons.load_sprite(make_icons.SOURCE, HEADERS)  # raises on a bad offset table
+    assert sp.frame_count > make_icons.SOURCE_FRAME
+    assert sp.frame(make_icons.SOURCE_FRAME).getchannel("A").getbbox()
 
 
 def test_committed_assets_are_what_make_icons_produces(tmp_path):
@@ -211,20 +193,18 @@ def test_committed_assets_are_what_make_icons_produces(tmp_path):
         assert mine[rel] == theirs[rel], f"{rel} is stale: run host/tray/make_icons.py"
 
 
-def test_cropping_uses_one_box_per_sprite_so_frames_do_not_jump():
-    sp = make_icons.load_sprite("sleeping", HEADERS)
-    idxs = make_icons.pick_frames(sp.frame_count, 8)
-    raw = [sp.frame(i) for i in idxs]
-    box = make_icons.union_bbox(raw)
-    squares = [make_icons.square_crop(f, box) for f in raw]
-    assert len({s.size for s in squares}) == 1 and squares[0].width == squares[0].height
+def test_the_master_is_cropped_tight_and_square():
+    master, info = make_icons.build_master(HEADERS)
+    assert master.width == master.height == info["master"]
+    x0, y0, x1, y1 = info["bbox"]
+    assert max(x1 - x0, y1 - y0) == master.width      # no empty border left
+    box = master.getchannel("A").getbbox()
+    assert box[0] == 0 or box[1] == 0                  # touches the edge on its long side
 
 
-def test_pick_frames():
-    assert make_icons.pick_frames(96, 1) == [0]
-    assert make_icons.pick_frames(96, [21]) == [21]
-    assert make_icons.pick_frames(12, 8) == [0, 1, 3, 4, 6, 7, 9, 10]
-    assert make_icons.pick_frames(5, 8) == [0, 1, 2, 3, 4]  # cannot keep more than exist
+def test_a_blank_frame_is_refused():
+    with pytest.raises(ValueError):
+        make_icons.bbox(Image.new("RGBA", (8, 8), (0, 0, 0, 0)))
 
 
 # --- the .ico ----------------------------------------------------------------------------
@@ -259,12 +239,3 @@ def test_nearest_size():
 
 def test_tray_icon_size_is_one_of_the_built_sizes():
     assert icons_mod.tray_icon_size() in SIZES
-
-
-# --- every state the daemon can report has a sprite ------------------------------------------------
-
-
-def test_every_mapped_sprite_exists(icons):
-    for sprite in ANIM_SPRITES.values():
-        assert sprite in SPRITES and icons.frame_count(sprite) >= 1
-    assert {"sleeping", "grey", "error"} <= set(SPRITES)
