@@ -67,6 +67,25 @@ class DaemonObserver(Protocol):
     def on_connection_change(self, connected: bool, transport: str = "") -> None: ...
     def on_notification_change(self, count: int) -> None: ...
 
+    # Optional extras, deliberately NOT part of this Protocol (an observer that
+    # lacks them is still a DaemonObserver). The daemon calls each one only if
+    # the observer has it, always on the daemon's event-loop thread, and logs
+    # and swallows anything it raises:
+    #
+    #   on_started(endpoint: str)                  hook listener is up
+    #   on_display_state_change(state: dict)       what the bar shows changed: the
+    #                                              dict the daemon logs as
+    #                                              "Display: anims=[...]" or
+    #                                              {"status": "sleeping"}
+    #   on_display_oneshot(anim: str)              a one-shot animation ("sweeping"
+    #                                              on /compact) played on the bar
+    #   on_hook_event(msg: dict)                   a hook message was received
+
+
+class DaemonAlreadyRunning(RuntimeError):
+    """Another daemon holds the lock file (embedded mode raises this instead of
+    exiting the process)."""
+
 
 def _stop_existing_daemon() -> bool:
     """Send SIGTERM to an existing daemon and wait for it to exit. Returns True if stopped.
@@ -109,11 +128,13 @@ def _try_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def _acquire_lock(takeover: bool = False) -> int:
+def _acquire_lock(takeover: bool = False, raise_on_conflict: bool = False) -> int:
     """Acquire an exclusive file lock.
 
     If takeover is True (menu bar mode), stop the existing daemon first.
-    If takeover is False (headless mode), exit if another daemon is running.
+    If takeover is False (headless mode), exit if another daemon is running,
+    or raise DaemonAlreadyRunning when raise_on_conflict is set (a daemon
+    embedded in another program must not end that program's process).
     """
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o600)
@@ -132,6 +153,8 @@ def _acquire_lock(takeover: bool = False) -> int:
                 sys.exit(1)
         else:
             os.close(fd)
+            if raise_on_conflict:
+                raise DaemonAlreadyRunning("Another clawd-tank daemon is already running")
             print("Another clawd-tank daemon is already running", file=sys.stderr)
             sys.exit(0)
     return fd
@@ -154,10 +177,16 @@ class ClawdDaemon:
         sessions_path: Optional[Path] = None,
         hook_transport: Optional[str] = None,
         hook_tcp_port: Optional[int] = None,
+        embedded: bool = False,
     ):
         """``hook_transport`` ("unix", "tcp" or None for auto) and
         ``hook_tcp_port`` choose where clawd-tank-notify reaches this daemon;
-        see hook_transport.py. Everything else is as upstream."""
+        see hook_transport.py.
+
+        ``embedded`` is for a daemon that runs in a thread of another program
+        (the Windows tray app): run() installs no signal handlers (only the main
+        thread may), and a lock held by another daemon raises DaemonAlreadyRunning
+        instead of calling sys.exit(). Everything else is as upstream."""
         self._transports: dict[str, TransportClient] = {}
         self._transport_queues: dict[str, asyncio.Queue] = {}
 
@@ -194,6 +223,7 @@ class ClawdDaemon:
         self._lock_fd: int | None = None
         self._observer = observer
         self._headless = headless
+        self._embedded = embedded
         self._sessions_path = sessions_path if sessions_path is not None else session_store.SESSIONS_PATH
         loaded_states, loaded_order, loaded_next_id = load_sessions(self._sessions_path)
 
@@ -220,6 +250,17 @@ class ClawdDaemon:
         self._transport_versions: dict[str, int] = {}  # transport_name → protocol version
         self._session_staleness_timeout: float = 600.0
         # _evict_stale_sessions() removed — Task 6 startup prune covers this.
+
+    def _observe(self, name: str, *args) -> None:
+        """Call an optional observer method (see DaemonObserver). A missing method
+        is fine; one that raises is logged and must not stop the daemon."""
+        method = getattr(self._observer, name, None) if self._observer else None
+        if method is None:
+            return
+        try:
+            method(*args)
+        except Exception:
+            logger.exception("Observer %s raised", name)
 
     async def _handle_message(self, msg: dict) -> None:
         """Handle a message from clawd-tank-notify via the socket."""
@@ -256,6 +297,7 @@ class ClawdDaemon:
                 session_project = f" [{project}]"
         logger.info("Socket msg: event=%s hook=%s session=%s%s%s",
                      event, hook, session_id[:12], session_project, extra)
+        self._observe("on_hook_event", msg)
 
         if event == "add":
             self._active_notifications[session_id] = msg
@@ -325,6 +367,8 @@ class ClawdDaemon:
                     fallback_payload = display_state_to_v1_payload(computed)
                     await transport.write_notification(fallback_payload)
             self._last_display_state = computed
+            self._observe("on_display_state_change", computed)
+            self._observe("on_display_oneshot", "sweeping")
 
         for q in self._transport_queues.values():
             await q.put(msg)
@@ -337,6 +381,12 @@ class ClawdDaemon:
 
         if changed:
             self._persist_sessions()
+
+    def display_state(self) -> dict:
+        """The display state the bar should show right now: ``{"status":
+        "sleeping"}`` or ``{"anims": [...], "ids": [...], ...}``. Read-only; call
+        it on the daemon's event-loop thread."""
+        return self._compute_display_state()
 
     def _compute_display_state(self) -> dict:
         """Derive the display state from all active session states."""
@@ -539,6 +589,7 @@ class ClawdDaemon:
                         f" overflow={new_state['overflow']}" if "overflow" in new_state else "")
         else:
             logger.info("Display: %s", new_state.get("status", "?"))
+        self._observe("on_display_state_change", new_state)
         for name, transport in self._transports.items():
             if transport.is_connected:
                 version = self._transport_versions.get(name, 1)
@@ -686,6 +737,7 @@ class ClawdDaemon:
         # Send current display state
         state = self._compute_display_state()
         self._last_display_state = state
+        self._observe("on_display_state_change", state)
         version = self._transport_versions.get(name, 1)
         if version >= 2:
             status_payload = display_state_to_ble_payload(state)
@@ -870,13 +922,26 @@ class ClawdDaemon:
             format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         )
 
-        self._lock_fd = _acquire_lock(takeover=not self._headless)
+        self._lock_fd = _acquire_lock(
+            takeover=not self._headless, raise_on_conflict=self._embedded)
         self._write_pid()
 
-        if self._headless:
+        if self._headless and not self._embedded:
             self._install_signal_handlers(asyncio.get_running_loop())
 
-        await self._socket.start()
+        try:
+            await self._socket.start()
+        except BaseException:
+            # The hook port is taken (or unusable). We hold the lock and wrote
+            # the PID file, so give both back: a daemon embedded in a long-lived
+            # program is retried in the same process, and its own stale lock
+            # would block that.
+            self._remove_pid()
+            if self._lock_fd is not None:
+                os.close(self._lock_fd)
+                self._lock_fd = None
+            raise
+        self._observe("on_started", self._socket.endpoint)
 
         for name in self._transports:
             # Each sender handles its own connect via ensure_connected()
