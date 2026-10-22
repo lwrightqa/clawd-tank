@@ -1,5 +1,7 @@
-# firmware/main/idf_component.yml
 dependencies:
-  lvgl/lvgl: "^9.2"
-  espressif/led_strip: "^2.5"
-  idf: ">=5.3"
+  # LVGL 9.5, the version the MiniBar bar's display bring-up (display.c) is proven with.
+  lvgl/lvgl: "~9.5.0"
+  # AXS15231B QSPI panel driver (Espressif, Apache-2.0), as MiniBar and Waveshare's 10_LVGL_V9_Test use it;
+  # 2.x changes the API, stay on 1.0.x.
+  espressif/esp_lcd_axs15231b: "~1.0.1"
+  idf: ">=5.4"

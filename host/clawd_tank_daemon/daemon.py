@@ -1,7 +1,6 @@
 """Clawd Tank daemon — bridges Claude Code hooks to ESP32 via BLE."""
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
@@ -12,6 +11,8 @@ from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
 from .ble_client import ClawdBleClient
+from .hook_transport import ENV_TCP_PORT, ENV_TRANSPORT, TCP_DEFAULT_PORT, TRANSPORTS
+from .procutil import IS_WINDOWS, pid_alive
 from .protocol import (
     ASK_USER_QUESTION_TOOL,
     daemon_message_to_ble_payload,
@@ -23,6 +24,11 @@ from .socket_server import SocketServer
 from .transport import TransportClient
 from . import session_store
 from .session_store import save_sessions, load_sessions
+
+if IS_WINDOWS:
+    import msvcrt
+else:
+    import fcntl
 
 logger = logging.getLogger("clawd-tank")
 
@@ -63,7 +69,10 @@ class DaemonObserver(Protocol):
 
 
 def _stop_existing_daemon() -> bool:
-    """Send SIGTERM to an existing daemon and wait for it to exit. Returns True if stopped."""
+    """Send SIGTERM to an existing daemon and wait for it to exit. Returns True if stopped.
+
+    On Windows ``os.kill(pid, SIGTERM)`` is TerminateProcess: abrupt, but this
+    path is only taken in menu bar (takeover) mode, which Windows has not."""
     if not PID_PATH.exists():
         return False
     try:
@@ -76,16 +85,28 @@ def _stop_existing_daemon() -> bool:
         return True  # already dead
     except PermissionError:
         return False
+    except OSError:
+        return not pid_alive(pid)  # Windows: no such process raises a plain OSError
     # Wait up to 3 seconds for it to release the lock
-    import time
     for _ in range(30):
-        try:
-            os.kill(pid, 0)  # check if still alive
-        except ProcessLookupError:
+        if not pid_alive(pid):
             return True
         time.sleep(0.1)
     logger.warning("Existing daemon (PID %d) did not exit in time", pid)
     return False
+
+
+def _try_lock(fd: int) -> None:
+    """Take an exclusive, non-blocking lock on fd; raise OSError if held elsewhere.
+
+    POSIX uses flock; Windows has no fcntl, so it locks the first byte with
+    msvcrt (LK_NBLCK fails at once when another process holds it). Both are
+    released by the OS when the daemon dies, so a crash never leaves a stale
+    lock."""
+    if IS_WINDOWS:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def _acquire_lock(takeover: bool = False) -> int:
@@ -97,14 +118,14 @@ def _acquire_lock(takeover: bool = False) -> int:
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _try_lock(fd)
     except OSError:
         if takeover:
             logger.info("Stopping existing daemon to take over...")
             _stop_existing_daemon()
             # Retry the lock
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _try_lock(fd)
             except OSError:
                 os.close(fd)
                 print("Could not acquire lock after stopping existing daemon", file=sys.stderr)
@@ -116,6 +137,13 @@ def _acquire_lock(takeover: bool = False) -> int:
     return fd
 
 
+def _shutdown_signals() -> list:
+    sigs = [signal.SIGTERM, signal.SIGINT]
+    if hasattr(signal, "SIGBREAK"):  # Windows: Ctrl+Break, and console close
+        sigs.append(signal.SIGBREAK)
+    return sigs
+
+
 class ClawdDaemon:
     def __init__(
         self,
@@ -124,7 +152,12 @@ class ClawdDaemon:
         sim_port: int = 0,
         sim_only: bool = False,
         sessions_path: Optional[Path] = None,
+        hook_transport: Optional[str] = None,
+        hook_tcp_port: Optional[int] = None,
     ):
+        """``hook_transport`` ("unix", "tcp" or None for auto) and
+        ``hook_tcp_port`` choose where clawd-tank-notify reaches this daemon;
+        see hook_transport.py. Everything else is as upstream."""
         self._transports: dict[str, TransportClient] = {}
         self._transport_queues: dict[str, asyncio.Queue] = {}
 
@@ -149,10 +182,15 @@ class ClawdDaemon:
         # Menu bar mode (headless=False): transports added later via add_transport()
 
         self._sender_tasks: dict[str, asyncio.Task] = {}
-        self._socket = SocketServer(on_message=self._handle_message)
+        self._socket = SocketServer(
+            on_message=self._handle_message,
+            transport=hook_transport,
+            tcp_port=hook_tcp_port,
+        )
         self._active_notifications: dict[str, dict] = {}
         self._running = True
         self._shutdown_event = asyncio.Event()
+        self._shutdown_task: Optional[asyncio.Task] = None
         self._lock_fd: int | None = None
         self._observer = observer
         self._headless = headless
@@ -526,12 +564,11 @@ class ClawdDaemon:
             pid = state.get("pid")
             if pid is None:
                 continue
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            # POSIX: os.kill(pid, 0); PermissionError (another user's PID) counts
+            # as alive. Windows: OpenProcess, because os.kill(pid, 0) there is
+            # GenerateConsoleCtrlEvent(CTRL_C_EVENT), not a probe.
+            if not pid_alive(pid):
                 dead.append(sid)
-            except PermissionError:
-                pass  # PID belongs to another user — assume alive
         for sid in dead:
             logger.info(
                 "Liveness: evicting session %s (PID %d gone)",
@@ -573,6 +610,8 @@ class ClawdDaemon:
                         "Transport '%s' liveness probe failed; sender will reconnect",
                         name,
                     )
+                else:
+                    logger.debug("Transport '%s' liveness probe ok", name)
             except Exception:
                 logger.exception("Transport '%s' liveness probe raised", name)
 
@@ -801,6 +840,29 @@ class ClawdDaemon:
             except Exception:
                 logger.exception("Transport '%s' reconnect failed", name)
 
+    def _request_shutdown(self) -> None:
+        """Start the shutdown once; a second signal is ignored while it runs."""
+        if self._shutdown_task is None:
+            self._shutdown_task = asyncio.ensure_future(self._shutdown())
+
+    def _install_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
+        """SIGTERM/SIGINT (and SIGBREAK on Windows) trigger a clean shutdown.
+
+        asyncio's add_signal_handler is POSIX-only. On Windows the proactor
+        loop still wakes up for a signal, so a plain signal.signal handler
+        that posts the shutdown onto the loop does the same job: Ctrl+C in the
+        daemon's console sends the "clear" payload and removes the PID file
+        instead of killing the process mid-write.
+        """
+        def _from_signal(*_args) -> None:
+            loop.call_soon_threadsafe(self._request_shutdown)
+
+        for sig in _shutdown_signals():
+            try:
+                loop.add_signal_handler(sig, self._request_shutdown)
+            except (NotImplementedError, RuntimeError, ValueError):
+                signal.signal(sig, _from_signal)
+
     async def run(self) -> None:
         """Main daemon loop."""
         logging.basicConfig(
@@ -812,9 +874,7 @@ class ClawdDaemon:
         self._write_pid()
 
         if self._headless:
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(sig, lambda: asyncio.create_task(self._shutdown()))
+            self._install_signal_handlers(asyncio.get_running_loop())
 
         await self._socket.start()
 
@@ -827,7 +887,42 @@ class ClawdDaemon:
         self._ble_liveness_task = asyncio.create_task(self._ble_liveness_checker())
 
         await self._shutdown_event.wait()
+        if self._shutdown_task is not None:
+            # Let a signal-triggered shutdown finish (clear payload, disconnect,
+            # PID file) before asyncio.run() tears the loop down.
+            await self._shutdown_task
         logger.info("Daemon run() finished")
+
+
+def _configure_logging(debug: bool, log_file: Optional[Path]) -> None:
+    """Console logging, plus an appended log file when asked. Called before
+    run(), whose own basicConfig is then a no-op."""
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        handlers=handlers,
+    )
+    if not debug:
+        # bleak's WinRT backend is chatty at DEBUG; keep it at INFO unless asked.
+        logging.getLogger("bleak").setLevel(logging.INFO)
+
+
+def _log_startup_banner(daemon: "ClawdDaemon") -> None:
+    try:
+        from importlib.metadata import version
+        bleak_version = version("bleak")
+    except Exception:
+        bleak_version = "unknown"
+    logger.info("Clawd Tank daemon starting: %s, Python %s, bleak %s",
+                sys.platform, sys.version.split()[0], bleak_version)
+    logger.info("Hooks reach this daemon at %s (set %s / %s to change)",
+                daemon._socket.endpoint, ENV_TRANSPORT, ENV_TCP_PORT)
+    logger.info("Transports: %s. Press Ctrl+C to stop.",
+                ", ".join(daemon._transports) or "none")
 
 
 def main():
@@ -839,14 +934,38 @@ def main():
                         help="Simulator only (no BLE)")
     parser.add_argument("--sim-port", type=int, default=SIM_DEFAULT_PORT,
                         help=f"Simulator TCP port (default: {SIM_DEFAULT_PORT})")
+    parser.add_argument("--transport", choices=TRANSPORTS, default=None,
+                        help="How Claude Code hooks reach the daemon: a Unix socket, "
+                             "TCP on 127.0.0.1, or auto (unix where available, tcp on "
+                             f"Windows). Default: ${ENV_TRANSPORT} or auto")
+    parser.add_argument("--tcp-port", type=int, default=None,
+                        help=f"Port for the TCP hook listener (default: ${ENV_TCP_PORT} "
+                             f"or {TCP_DEFAULT_PORT})")
+    parser.add_argument("--log-file", type=Path, default=None,
+                        help="Also append log lines to this file")
+    parser.add_argument("--debug", action="store_true",
+                        help="Log at DEBUG level, bleak included")
     args = parser.parse_args()
 
     sim_port = 0
     if args.sim or args.sim_only or args.sim_port != SIM_DEFAULT_PORT:
         sim_port = args.sim_port
 
-    daemon = ClawdDaemon(sim_port=sim_port, sim_only=args.sim_only)
-    asyncio.run(daemon.run())
+    _configure_logging(args.debug, args.log_file)
+    try:
+        daemon = ClawdDaemon(
+            sim_port=sim_port, sim_only=args.sim_only,
+            hook_transport=args.transport, hook_tcp_port=args.tcp_port,
+        )
+    except ValueError as e:
+        parser.error(str(e))
+    _log_startup_banner(daemon)
+    try:
+        asyncio.run(daemon.run())
+    except OSError as e:
+        # Typically the TCP hook port is taken; SocketServer.start() says what to do.
+        logger.error("%s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

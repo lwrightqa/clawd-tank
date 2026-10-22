@@ -17,6 +17,13 @@ import pytest
 from clawd_tank_menubar.hooks import NOTIFY_SCRIPT
 from clawd_tank_daemon.protocol import hook_payload_to_daemon_message
 
+# These tests stand a Unix socket server up in /tmp. Windows has no AF_UNIX;
+# the same round trips run over TCP in test_notify_tcp.py.
+pytestmark = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="Unix domain sockets are not available on this platform (see test_notify_tcp.py)",
+)
+
 
 def _make_sock_path() -> str:
     """Return a short Unix socket path safe on macOS (max 104 bytes).

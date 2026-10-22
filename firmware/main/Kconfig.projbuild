@@ -6,4 +6,21 @@ menu "Clawd Configuration"
         help
             Enable WiFi for OTA updates and debug logging.
             Not needed for normal BLE notification operation.
+
+    config CLAWD_LCD_TURN_180
+        bool "MiniBar bar: turn the picture 180 degrees"
+        default n
+        help
+            The bar's AXS15231B panel is 172 x 640 portrait, drawn as 640 x 172 by software rotation in display.c.
+            Upright (side buttons on top) is LVGL rotation 270 on the Waveshare ESP32-S3-Touch-LCD-3.49 V2, as the
+            MiniBar project found on the board; turn this on (rotation 90) if the picture comes up upside down.
+
+    config CLAWD_SLEEP_BRIGHTNESS
+        int "MiniBar bar: backlight level while Clawd sleeps (0 to 255)"
+        range 0 255
+        default 20
+        help
+            When the daemon reports no active Claude session, the firmware shows Clawd asleep. Upstream turns the
+            backlight off then (0 here), which leaves a desk bar black. The default dims it so the sleeping Clawd stays
+            visible. The level is never brighter than the brightness set over BLE (default 102).
 endmenu
