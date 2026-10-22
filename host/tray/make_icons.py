@@ -69,10 +69,23 @@ KEEP: Dict[str, object] = {
     "dizzy": 8,
 }
 
-# How a size-by-size shrink is done. The art is chunky pixels at 40-190 px; at
-# 16-32 px "nearest" drops whole features at random, so shrinking averages the
-# covered pixels (BOX) and only enlarging is nearest-neighbour.
-SHRINK = "box"
+# How a shrink is done. The art is flat-colour pixel art at 60-230 px, so a shrink
+# must not blend colours (BOX turns the outline and the eyes into brown mush) and
+# must not drop features at random (NEAREST misses a 2 px eye between two samples).
+#   "mode"    each target pixel takes the most common colour of the block of source
+#             pixels it covers: flat colours, stable from frame to frame. Black
+#             (the eyes) counts DARK_BOOST times and a colour that is neither body
+#             nor shadow (the "!", sparkles, a hat, a bubble) ACCENT_BOOST times, so
+#             the small features that make a state readable survive; a block that
+#             is mostly transparent stays transparent (OPAQUE_MIN).
+#   "box"     average (premultiplied alpha), "nearest" plain sampling.
+# Enlarging is always nearest-neighbour.
+SHRINK = "mode"
+DARK_BOOST = 4        # weight of near-black pixels (the eyes) in the "mode" shrink
+DARK_MAX = 4          # "near-black": every channel at most this
+ACCENT_BOOST = 2      # weight of a bright colour that is not the body's
+SHADOW_MAX = 60       # darker than this (every channel) is shadow or outline: weight 1
+OPAQUE_MIN = 0.30     # weighted share of opaque source pixels that makes a target pixel opaque
 
 RED = (226, 49, 49, 255)
 RED_RIM = (255, 255, 255, 255)
@@ -166,35 +179,86 @@ def square_crop(frame: Image.Image, box: Tuple[int, int, int, int]) -> Image.Ima
     return out
 
 
+def _body_colour(img: Image.Image) -> Tuple[int, int, int]:
+    """The most common opaque colour: Clawd's body."""
+    raw = img.tobytes()
+    votes: Dict[Tuple[int, int, int], int] = {}
+    for r, g, b, a in zip(raw[0::4], raw[1::4], raw[2::4], raw[3::4]):
+        if a >= 128:
+            votes[(r, g, b)] = votes.get((r, g, b), 0) + 1
+    return max(votes, key=votes.get) if votes else (0, 0, 0)
+
+
+def _mode_shrink(img: Image.Image, size: int) -> Image.Image:
+    """Shrink by block: the most common colour of the source block under each
+    target pixel (blocks may overlap by a pixel where the ratio is not whole)."""
+    side = img.width
+    body = _body_colour(img)
+    src = img.load()
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    dst = out.load()
+    for ty in range(size):
+        y0 = (ty * side) // size
+        y1 = max(y0 + 1, -((-(ty + 1) * side) // size))
+        for tx in range(size):
+            x0 = (tx * side) // size
+            x1 = max(x0 + 1, -((-(tx + 1) * side) // size))
+            votes: Dict[Tuple[int, int, int], int] = {}
+            clear = 0
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    r, g, b, a = src[x, y]
+                    if a < 128:
+                        clear += 1
+                        continue
+                    peak = max(r, g, b)
+                    if peak <= DARK_MAX:
+                        weight = DARK_BOOST
+                    elif peak > SHADOW_MAX and (r, g, b) != body:
+                        weight = ACCENT_BOOST
+                    else:
+                        weight = 1
+                    votes[(r, g, b)] = votes.get((r, g, b), 0) + weight
+            weight_in = sum(votes.values())
+            if weight_in and weight_in / (weight_in + clear) >= OPAQUE_MIN:
+                colour = max(votes.items(), key=lambda kv: (kv[1], kv[0]))[0]
+                dst[tx, ty] = colour + (255,)
+    return out
+
+
 def scale_to(img: Image.Image, size: int) -> Image.Image:
-    """Scale a square RGBA image to size x size. Enlarging is nearest-neighbour
-    (crisp pixels). Shrinking averages with premultiplied alpha, so a
-    transparent neighbour never bleeds its colour into the edge."""
+    """Scale a square RGBA image to size x size (see SHRINK)."""
     if img.width == size:
         return img.copy()
     if size >= img.width or SHRINK == "nearest":
         return img.resize((size, size), Image.NEAREST)
-    r, g, b, a = img.split()
-    pre = Image.merge("RGBA", (
-        Image.composite(r, Image.new("L", img.size, 0), a),
-        Image.composite(g, Image.new("L", img.size, 0), a),
-        Image.composite(b, Image.new("L", img.size, 0), a),
-        a,
-    ))
-    small = pre.resize((size, size), Image.BOX)
-    sr, sg, sb, sa = small.split()
-    px_a = sa.load()
-    out = Image.new("RGBA", (size, size))
-    px_o = out.load()
-    p = [c.load() for c in (sr, sg, sb)]
-    for y in range(size):
-        for x in range(size):
-            alpha = px_a[x, y]
-            if alpha == 0:
-                px_o[x, y] = (0, 0, 0, 0)
+    if SHRINK == "box":
+        # Pillow averages RGBA on premultiplied alpha, so transparency never
+        # bleeds its colour into an edge pixel.
+        return img.resize((size, size), Image.BOX)
+    return _mode_shrink(img, size)
+
+
+LIGHT_MIN = 235            # a pixel whose every channel is at least this is "near-white"
+LIGHT_OUTLINE = (112, 124, 148, 255)
+
+
+def outline_whites(img: Image.Image) -> Image.Image:
+    """Give near-white shapes (the thinking bubble) a 1 px grey outline, so they do
+    not vanish on a light taskbar. Only transparent neighbours get the outline:
+    nothing inside a sprite changes."""
+    w, h = img.size
+    src = img.load()
+    out = img.copy()
+    dst = out.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = src[x, y]
+            if a == 0 or min(r, g, b) < LIGHT_MIN:
                 continue
-            px_o[x, y] = tuple(min(255, (p[k][x, y] * 255 + alpha // 2) // alpha)
-                               for k in range(3)) + (alpha,)
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h and src[nx, ny][3] == 0:
+                    dst[nx, ny] = LIGHT_OUTLINE
     return out
 
 
@@ -250,7 +314,8 @@ def build_masters(headers: Path) -> Tuple[Dict[str, List[Image.Image]], Dict[str
 
 
 def sized(masters: Dict[str, List[Image.Image]], size: int) -> Dict[str, List[Image.Image]]:
-    out = {name: [scale_to(f, size) for f in frames] for name, frames in masters.items()}
+    out = {name: [outline_whites(scale_to(f, size)) for f in frames]
+           for name, frames in masters.items()}
     idle = out["idle"][0]
     out["grey"] = [greyed(idle)]
     out["error"] = [with_red_dot(idle)]
@@ -328,6 +393,33 @@ def contact_sheet(assets: Path, out_dir: Path, zoom: int = 1) -> List[Path]:
     return written
 
 
+def animation_sheet(assets: Path, out_dir: Path, size: int = 24, zoom: int = 4) -> Path:
+    """Every kept frame of every state in one row each, at `size` px, enlarged
+    `zoom` times with nearest-neighbour, on a dark and a light half."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    strips = {n: Image.open(assets / "frames" / f"{n}-{size}.png").convert("RGBA")
+              for n in STATES}
+    cell = size * zoom + 6
+    widest = max(st.width // size for st in strips.values())
+    sheet = Image.new("RGBA", (96 + widest * cell * 2 + 12, len(STATES) * cell + 6), (0, 0, 0, 0))
+    d = ImageDraw.Draw(sheet)
+    half = 96 + widest * cell + 6
+    d.rectangle([0, 0, half - 1, sheet.height], fill=(32, 32, 32, 255))
+    d.rectangle([half, 0, sheet.width, sheet.height], fill=(243, 243, 243, 255))
+    for r, state in enumerate(STATES):
+        y = 6 + r * cell
+        d.text((6, y + cell // 2 - 8), state, fill=(230, 230, 230, 255))
+        strip_img = strips[state]
+        for i in range(strip_img.width // size):
+            frame = strip_img.crop((i * size, 0, (i + 1) * size, size)).resize(
+                (size * zoom, size * zoom), Image.NEAREST)
+            sheet.alpha_composite(frame, (96 + i * cell, y))
+            sheet.alpha_composite(frame, (half + 6 + i * cell, y))
+    path = out_dir / f"animation-frames-{size}px.png"
+    sheet.save(path)
+    return path
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--headers", type=Path, default=HEADERS,
@@ -335,7 +427,8 @@ def main(argv=None) -> int:
     ap.add_argument("--assets", type=Path, default=ASSETS,
                     help="output folder (default: host/clawd_tank_tray/assets)")
     ap.add_argument("--contact-sheet", type=Path, default=None, metavar="DIR",
-                    help="also write contact sheets (1x and 6x) of every state into DIR")
+                    help="also write contact sheets of every state (16/24/32/64 px, at 1x "
+                         "and 6x) and of every animation frame into DIR")
     args = ap.parse_args(argv)
     manifest = write_assets(args.headers, args.assets)
     n = sum(1 for _ in (args.assets / "frames").glob("*.png"))
@@ -346,6 +439,7 @@ def main(argv=None) -> int:
         for z in (1, 6):
             for p in contact_sheet(args.assets, args.contact_sheet, z):
                 print("contact sheet:", p)
+        print("contact sheet:", animation_sheet(args.assets, args.contact_sheet))
     return 0
 
 
