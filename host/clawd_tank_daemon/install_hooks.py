@@ -101,6 +101,54 @@ def plan_merge(settings: Optional[dict], hooks_module) -> tuple:
     return merged, changes
 
 
+def plan_remove(settings: Optional[dict], hooks_module) -> tuple:
+    """(settings without the Clawd Tank hooks, events that changed). Pure; does
+    not touch `settings`. The inverse of plan_merge.
+
+    Only entries whose command runs our notify script are removed: from every
+    event, not just the ones this version manages, so an older version's hook
+    goes too. A group the user shares with us keeps its other commands and its
+    matcher; an event left with no group is dropped, and so is a ``hooks``
+    object that this empties. Everything else is kept as it was.
+    """
+    result = copy.deepcopy(settings) if isinstance(settings, dict) else {}
+    hooks = result.get("hooks")
+    if not isinstance(hooks, dict):
+        return result, []
+    changed = []
+    for event in list(hooks):
+        groups = hooks[event]
+        if not isinstance(groups, list):
+            continue
+        kept = []
+        touched = False
+        for group in groups:
+            entries = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(entries, list):
+                kept.append(group)
+                continue
+            left = [h for h in entries
+                    if not (isinstance(h, dict)
+                            and hooks_module._command_is_ours(h.get("command", "")))]
+            if len(left) == len(entries):
+                kept.append(group)
+            else:
+                touched = True
+                if left:
+                    group["hooks"] = left
+                    kept.append(group)
+        if not touched:
+            continue
+        changed.append(event)
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    if changed and not hooks:
+        del result["hooks"]
+    return result, changed
+
+
 def backup_path_for(path: Path, now: datetime) -> Path:
     return path.with_name(f"{path.name}.bak-{now.strftime('%Y%m%d-%H%M%S')}")
 
@@ -120,6 +168,28 @@ def write_settings_atomic(path: Path, settings: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def apply_install(hooks_module, settings_path: Path, settings: Optional[dict],
+                  merged: dict, backup: Path) -> bool:
+    """The writes of an install, in the order the command line has always done
+    them: the notify script, a backup copy of an existing settings.json, then
+    settings.json itself (atomically). Returns True if the file reads back with
+    our hooks in place. Raises OSError (disk, permissions); SettingsError if
+    the file written cannot be read back. Callers must have asked the user."""
+    hooks_module.write_notify_script(hooks_module.NOTIFY_SCRIPT_PATH)
+    if settings is not None:
+        shutil.copy2(settings_path, backup)
+    write_settings_atomic(settings_path, merged)
+    return hooks_module.settings_have_our_hooks(load_settings(settings_path))
+
+
+def apply_remove(settings_path: Path, remaining: dict, backup: Path) -> None:
+    """Back up settings.json, then write `remaining` (from plan_remove) over it
+    atomically. The notify script is left where it is: nothing calls it once
+    the hooks are gone. Raises OSError."""
+    shutil.copy2(settings_path, backup)
+    write_settings_atomic(settings_path, remaining)
 
 
 def run(
@@ -215,16 +285,12 @@ def run(
         return 1
 
     try:
-        hooks.write_notify_script(hooks.NOTIFY_SCRIPT_PATH)
-        if settings is not None:
-            shutil.copy2(settings_path, backup)
-        write_settings_atomic(settings_path, merged)
+        verified = apply_install(hooks, settings_path, settings, merged, backup)
     except OSError as e:
         print(f"Error: {e}", file=err)
         return 2
 
-    verify = load_settings(settings_path)
-    if not hooks.settings_have_our_hooks(verify):
+    if not verified:
         print("Error: the settings file was written but does not read back with the "
               "hooks in place; restore the backup if you made one.", file=err)
         return 2
