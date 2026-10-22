@@ -1,0 +1,313 @@
+{
+  "sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64
+  ],
+  "ico_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    256
+  ],
+  "transparent_key": "0x18C5",
+  "shrink": "box",
+  "sprites": {
+    "idle": {
+      "source": "sprite_idle.h",
+      "source_frames": 96,
+      "kept": [
+        0
+      ],
+      "bbox": [
+        6,
+        11,
+        66,
+        51
+      ],
+      "master": 60
+    },
+    "sleeping": {
+      "source": "sprite_sleeping.h",
+      "source_frames": 36,
+      "kept": [
+        21
+      ],
+      "bbox": [
+        2,
+        26,
+        70,
+        96
+      ],
+      "master": 70
+    },
+    "thinking": {
+      "source": "sprite_thinking.h",
+      "source_frames": 32,
+      "kept": [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28
+      ],
+      "bbox": [
+        2,
+        0,
+        76,
+        92
+      ],
+      "master": 92
+    },
+    "typing": {
+      "source": "sprite_typing.h",
+      "source_frames": 12,
+      "kept": [
+        0,
+        1,
+        3,
+        4,
+        6,
+        7,
+        9,
+        10
+      ],
+      "bbox": [
+        5,
+        7,
+        86,
+        78
+      ],
+      "master": 81
+    },
+    "debugger": {
+      "source": "sprite_debugger.h",
+      "source_frames": 96,
+      "kept": [
+        0,
+        12,
+        24,
+        36,
+        48,
+        60,
+        72,
+        84
+      ],
+      "bbox": [
+        8,
+        0,
+        86,
+        43
+      ],
+      "master": 78
+    },
+    "building": {
+      "source": "sprite_building.h",
+      "source_frames": 8,
+      "kept": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "bbox": [
+        13,
+        0,
+        124,
+        75
+      ],
+      "master": 111
+    },
+    "conducting": {
+      "source": "sprite_conducting.h",
+      "source_frames": 16,
+      "kept": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "bbox": [
+        1,
+        0,
+        76,
+        78
+      ],
+      "master": 78
+    },
+    "wizard": {
+      "source": "sprite_wizard.h",
+      "source_frames": 48,
+      "kept": [
+        0,
+        6,
+        12,
+        18,
+        24,
+        30,
+        36,
+        42
+      ],
+      "bbox": [
+        4,
+        2,
+        71,
+        129
+      ],
+      "master": 127
+    },
+    "beacon": {
+      "source": "sprite_beacon.h",
+      "source_frames": 64,
+      "kept": [
+        0,
+        8,
+        16,
+        24,
+        32,
+        40,
+        48,
+        56
+      ],
+      "bbox": [
+        6,
+        6,
+        128,
+        127
+      ],
+      "master": 122
+    },
+    "confused": {
+      "source": "sprite_confused.h",
+      "source_frames": 48,
+      "kept": [
+        0,
+        6,
+        12,
+        18,
+        24,
+        30,
+        36,
+        42
+      ],
+      "bbox": [
+        14,
+        37,
+        115,
+        109
+      ],
+      "master": 101
+    },
+    "sweeping": {
+      "source": "sprite_sweeping.h",
+      "source_frames": 12,
+      "kept": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10
+      ],
+      "bbox": [
+        51,
+        0,
+        138,
+        56
+      ],
+      "master": 87
+    },
+    "happy": {
+      "source": "sprite_happy.h",
+      "source_frames": 20,
+      "kept": [
+        0,
+        3,
+        6,
+        10,
+        13,
+        16
+      ],
+      "bbox": [
+        0,
+        2,
+        116,
+        88
+      ],
+      "master": 116
+    },
+    "alert": {
+      "source": "sprite_alert.h",
+      "source_frames": 40,
+      "kept": [
+        0,
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35
+      ],
+      "bbox": [
+        25,
+        0,
+        120,
+        98
+      ],
+      "master": 98
+    },
+    "dizzy": {
+      "source": "sprite_dizzy.h",
+      "source_frames": 32,
+      "kept": [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28
+      ],
+      "bbox": [
+        1,
+        2,
+        92,
+        72
+      ],
+      "master": 91
+    },
+    "grey": {
+      "derived_from": "idle",
+      "kept": [
+        0
+      ]
+    },
+    "error": {
+      "derived_from": "idle",
+      "kept": [
+        0
+      ]
+    }
+  }
+}
