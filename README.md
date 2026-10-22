@@ -49,7 +49,7 @@ The original board this project started on, the ESP32-C6-LCD-1.47 (320 x 172 ST7
 
 ## MiniBar bar (ESP32-S3-Touch-LCD-3.49 V2) port
 
-The `bar` branch runs Clawd Tank on the Waveshare ESP32-S3-Touch-LCD-3.49 V2 (ESP32-S3R8: 16 MB flash, 8 MB octal PSRAM, a 640 x 172 AXS15231B panel over QSPI, a TCA9554 I/O expander, no WS2812 LED). It is a standalone build of this repo; nothing from the MiniBar project is needed at build time.
+The `waveshare-bar` branch runs Clawd Tank on the Waveshare ESP32-S3-Touch-LCD-3.49 V2 (ESP32-S3R8: 16 MB flash, 8 MB octal PSRAM, a 640 x 172 AXS15231B panel over QSPI, a TCA9554 I/O expander, no WS2812 LED). It is a standalone build of this repo; nothing from the MiniBar project is needed at build time.
 
 What changed (all under `firmware/`):
 
@@ -127,7 +127,7 @@ See [simulator/README.md](simulator/README.md) for full CLI reference and JSON s
 
 ### Firmware
 
-Requires [ESP-IDF 5.3.2](https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32c6/get-started/index.html) (bundled in `bsp/esp-idf/`, activated via direnv). On the `bar` branch (ESP32-S3) use ESP-IDF 5.4.2 and `idf.py set-target esp32s3` instead, as described in the port section above.
+Requires [ESP-IDF 5.3.2](https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32c6/get-started/index.html) (bundled in `bsp/esp-idf/`, activated via direnv). On the `waveshare-bar` branch (ESP32-S3) use ESP-IDF 5.4.2 and `idf.py set-target esp32s3` instead, as described in the port section above.
 
 ```bash
 cd firmware
