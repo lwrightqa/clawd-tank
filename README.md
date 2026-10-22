@@ -6,7 +6,7 @@
 
 A tiny desktop aquarium for your Claude Code sessions.
 
-Clawd Tank is a notification display for Claude Code built on a [Waveshare ESP32-C6-LCD-1.47](https://s.click.aliexpress.com/e/_c4PGS55v) (320x172 ST7789). An animated pixel-art crab named Clawd lives on the screen, reacting to your coding session — alerting on new notifications, celebrating when you dismiss them, and sleeping when you're away.
+Clawd Tank is a notification display for Claude Code running on the [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/esp32-s3-touch-lcd-3.49.htm), a 3.49" 640 x 172 IPS display board with an ESP32-S3 (16 MB flash, 8 MB PSRAM), Bluetooth 5 LE and a battery. An animated pixel-art crab named Clawd lives on the screen, reacting to your coding session — alerting on new notifications, celebrating when you dismiss them, and sleeping when you're away.
 
 **No hardware? No problem.** The simulator runs natively on macOS and ships bundled inside the Menu Bar app. Download it from [Releases](https://github.com/marciogranzotto/clawd-tank/releases) — no build tools needed.
 
@@ -18,7 +18,7 @@ Clawd Tank is a notification display for Claude Code built on a [Waveshare ESP32
 ## How It Works
 
 ```
-Claude Code hooks --> clawd-tank-notify --> daemon --> BLE --> ESP32-C6 display
+Claude Code hooks --> clawd-tank-notify --> daemon --> BLE --> ESP32-S3 display
                                                   \-> TCP --> Simulator (SDL2)
 ```
 
@@ -31,18 +31,21 @@ Claude Code hooks --> clawd-tank-notify --> daemon --> BLE --> ESP32-C6 display
 
 | Directory | What | Language |
 |-----------|------|----------|
-| `firmware/` | ESP-IDF firmware (LVGL UI, NimBLE GATT server, SPI display) | C |
+| `firmware/` | ESP-IDF firmware (LVGL UI, NimBLE GATT server, QSPI display) | C |
 | `simulator/` | Native macOS simulator — runs the same firmware code without hardware | C |
 | `host/` | Background daemon, Claude Code hook handler, macOS menu bar app | Python |
 | `tools/` | Sprite pipeline (SVG to PNG to RLE-compressed RGB565), GIF recorder, BLE debugging | Python |
 
 ## Hardware
 
-- **Board**: [Waveshare ESP32-C6-LCD-1.47](https://s.click.aliexpress.com/e/_c4PGS55v)
-- **Display**: 1.47" 320x172 ST7789V (SPI), 16-bit RGB565
-- **SoC**: ESP32-C6FH8 (RISC-V, single core), 8MB flash, 512KB SRAM (no PSRAM)
-- **RGB LED**: Onboard WS2812B on GPIO8 — flashes on incoming notifications
-- **Connectivity**: BLE 5.0 (NimBLE, peripheral role)
+- **Board**: [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/esp32-s3-touch-lcd-3.49.htm) (V2)
+- **MCU**: ESP32-S3R8, dual-core up to 240 MHz, 16 MB flash, 8 MB PSRAM
+- **Display**: 3.49" IPS, 172 x 640 portrait (drawn here as 640 x 172 landscape), AXS15231B over QSPI
+- **Connectivity**: Bluetooth 5 LE (NimBLE, peripheral role)
+- **Keys**: BOOT (dismisses notifications), PWR (screen off/on), RESET
+- **Power**: USB-C, or a lithium battery (the case versions include one)
+
+The original board this project started on, the ESP32-C6-LCD-1.47 (320 x 172 ST7789, WS2812 LED), is supported by the upstream repository ([marciogranzotto/clawd-tank](https://github.com/marciogranzotto/clawd-tank)), not by this branch.
 
 ## MiniBar bar (ESP32-S3-Touch-LCD-3.49 V2) port
 
@@ -69,7 +72,7 @@ Notification state: the scene shrinks to 460 px (107 on 320) and the panel takes
 
 Clawd is drawn at 1.5 times the upstream size (6 px per SVG unit instead of 4) in a brighter orange: the body is `#FF7939` on the panel (`#FF7A3D` was asked for; RGB565 shows the nearest value) instead of upstream's salmon `#D68263`. Props, eyes and the grass are untouched. The sprites in `firmware/main/assets/` are regenerated, not edited: `tools/build_bar_sprites.py` runs upstream's `svg2frames.py`, `png2rgb565.py` and `crop_sprites.py` at the new scale, with `tools/clawd_recolour.py` repainting the body between the first and the second (it also recolours the HUD's small crab, `sprite_mini_crab.h`). `py -3 tools/build_bar_sprites.py --install` rebuilds all of them in about two minutes (it needs Playwright with Chromium); `--scale 4 --colour none` gives upstream's own sprites back. The No connection screen (`sprite_disconnected.h`) is drawn at 1.25x (`--disconnected-scale 5`), because its Bluetooth bubble does not fit the 172 px height at 1.5x.
 
-In `scene.c`, `y_offset` keeps each sprite's ground line 8 px above the bottom of the screen: 16 minus the rows cropped at the bottom, plus upstream's hand trims (the rule is in the comment above `anim_defs`). At 1.5x every sprite fits the 172 px height except the wizard's top sparkles (they fly off the top, up to 31 px) and the beacon's outer ring (6 px). The four main working sprites (typing, debugger, thinking, conducting) are at most 130 px wide, so four fit the quiet layout's 160 px lanes and three the 140 px lanes beside the notification panel (`LANE_MIN_PX` is 140). Some rarer animations are wider than a lane with their props (confused 228 px, going away 254, sweeping 210, building 186, happy 186, alert 178) and may overlap a neighbour while they play. The 320 layout (the simulator) has not been retuned for the bigger sprites. The app image is 2.6 MB (84 % of the 16 MB partition free, +0.55 MiB for the sprites), and a session's frame buffer is up to 116 KB, in PSRAM.
+In `scene.c`, `y_offset` keeps each sprite's ground line 8 px above the bottom of the screen: 16 minus the rows cropped at the bottom, plus upstream's hand trims (the rule is in the comment above `anim_defs`). At 1.5x every sprite fits the 172 px height except the wizard's top sparkles (they fly off the top, up to 31 px) and the beacon's outer ring (6 px). The four main working sprites (typing, debugger, thinking, conducting) are at most 130 px wide, so four fit the quiet layout's 160 px lanes and three the 140 px lanes beside the notification panel (`LANE_MIN_PX` is 140). Some rarer animations are wider than a lane with their props (confused 228 px, going away 254, sweeping 210, building 186, happy 186, alert 178) and may overlap a neighbour while they play. The 320 layout (the simulator) has not been retuned for the bigger sprites. The app image is 2.6 MB (84 % of the 16 MB partition free, +0.55 MiB for the sprites), and a session's frame buffer is up to 134 KB (the No connection screen, 278 x 164), in PSRAM.
 
 Build with ESP-IDF 5.4.2 (the component manager fetches LVGL and the panel driver on the first configure):
 
@@ -79,9 +82,9 @@ idf.py set-target esp32s3
 idf.py build
 ```
 
-Build result on 2026-10-20 (ESP-IDF 5.4.2, LVGL 9.5.0, `esp_lcd_axs15231b` 1.0.1~1, with the wide layout): 0 errors, 0 warnings. `clawd-tank.bin` is 0x1FBDD0 bytes (2,080,208, about 2.0 MB) against the 0xFF0000-byte factory partition, 0xDF4230 bytes (88%) free.
+Build result on 2026-10-22 (ESP-IDF 5.4.2, LVGL 9.5.0, `esp_lcd_axs15231b` 1.0.1~1): 0 errors, 0 warnings. `clawd-tank.bin` is 0x280AD0 bytes (2,624,208, about 2.5 MB) against the 0xFF0000-byte factory partition, 0xD6F530 bytes (84%) free.
 
-**Not flashed yet.** This port has only been built. The panel init, the orientation and the brightness curve are what MiniBar runs on the same board, but nothing here has been seen on hardware. When flashing, use `idf.py -p <port> flash monitor`; the board's USB-C is the ESP32-S3's USB Serial/JTAG port.
+**On the hardware.** Flashed and running on the bar since 2026-10-20: the panel, its orientation, the backlight, the wide layout and the Bluetooth link to the daemon work as built (the daemon connects and Clawd reacts). The PWR key (screen off and on) is built and initialises at boot, but has not been confirmed by hand yet. Flash with `idf.py -p <port> flash monitor`; the board's USB-C is the ESP32-S3's USB Serial/JTAG port. Flash only the app (offset 0x10000) to keep the saved settings.
 
 Attribution: the board bring-up (expander driver and power hold, panel reset and init sequence, QSPI settings, chunked flush, backlight PWM and brightness curve, pin map) is taken from the MiniBar project's board layer (`firmware/components/board/`), which ported it from Waveshare's ESP-IDF examples for the V2 board (`10_LVGL_V9_Test`, `11_FactoryProgram`, `07_BATT_PWR_Test`). The AXS15231B panel driver is Espressif's `esp_lcd_axs15231b` component (Apache-2.0), pulled by the component manager, not vendored.
 
@@ -124,7 +127,7 @@ See [simulator/README.md](simulator/README.md) for full CLI reference and JSON s
 
 ### Firmware
 
-Requires [ESP-IDF 5.3.2](https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32c6/get-started/index.html) (bundled in `bsp/esp-idf/`, activated via direnv).
+Requires [ESP-IDF 5.3.2](https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32c6/get-started/index.html) (bundled in `bsp/esp-idf/`, activated via direnv). On the `bar` branch (ESP32-S3) use ESP-IDF 5.4.2 and `idf.py set-target esp32s3` instead, as described in the port section above.
 
 ```bash
 cd firmware
