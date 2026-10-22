@@ -6,7 +6,7 @@
 Claude Code hook --> clawd-tank-notify.py --TCP 127.0.0.1:47421--> ClawdTank.exe (daemon inside) --BLE--> the bar
 ```
 
-The tray icon is Clawd himself, and it shows what he is doing on the bar.
+The tray icon is one small, still Clawd. It says whether the bar is connected and nothing else; it never animates.
 
 ## First run
 
@@ -20,22 +20,21 @@ The hooks are the ones the command-line installer writes: each runs `py -3 "C:/U
 
 ## The icon
 
-| What Clawd shows | When |
+| Icon | When |
 | --- | --- |
-| Idle | the bar is connected, a Claude Code session is open and waiting |
-| Asleep (Zzz) | the bar is connected and no Claude Code session is open |
-| Thinking, typing, reading, running a command, subagents, web search, using a tool, confused, compacting, error, "needs you" | Claude Code is doing that: the same animation the bar plays |
-| Greyed (desaturated, see-through) | looking for the bar, or the link dropped (it reconnects by itself) |
+| The orange **Clawd** | the bar is connected. Whatever Claude Code is doing (or not doing), this is the same picture |
+| **Greyed** Clawd (grey, see-through) | looking for the bar, or the link dropped (it reconnects by itself) |
 | Clawd with a **red dot** | not running: another daemon holds the port, or the engine died (it restarts itself; **Retry** forces it) |
 
-With several sessions the icon shows the most important one: needs you, then error, then the busiest. Animated states change frame about three times a second; nothing runs while the picture is still. The tooltip says the same in words.
+That is all there is: three still pictures, chosen by the connection alone. Nothing is animated and no timer runs; while the connection does not change, the app sends the notification area nothing at all. What Claude Code is doing (sessions, the last event) is shown as text, in the window and in the menu, and never changes the icon. The tooltip says the connection in words (*Connected to Clawd Tank*, *Scanning for the bar...*, the port-in-use message).
 
 **Click** the icon (or double-click) to show the window. **Right-click** for the menu:
 
 | Item | |
 | --- | --- |
 | **Open** | the window |
-| status line (greyed) | bar connected / scanning, what Clawd is doing |
+| status line (greyed) | *Connected to Clawd Tank*, *Scanning for the bar...*, or what is wrong |
+| *Last event: ...* (greyed) | the last Claude Code hook the app received, with its time; hidden until there is one |
 | **Retry** | only while the red dot is showing |
 | **Start with Windows** | a checkbox; it reads the registry every time the menu opens |
 | **Install or repair hooks** | asks first, as above |
@@ -45,7 +44,7 @@ With several sessions the icon shows the most important one: needs you, then err
 
 ## The window
 
-360 x 300: Clawd at 3x on the left; on the right **Bar** (Connected / Scanning... / Disconnected), **Hooks** (Installed / Not installed / Outdated), **Claude Code** (how many sessions, and the last event with its time). Buttons: **Install or repair hooks**, **Open log**, **Hide to tray**, **Quit**; **Retry** appears next to a red message when the engine is stopped.
+About 340 x 250 at 100 % scaling, plain text and no picture of Clawd (only the small Clawd in the title bar, which is the window's icon). Four lines: **Bar** (Connected / Scanning... / Disconnected), **Hooks** (Installed / Not installed / Outdated), **Claude Code** (how many sessions are open) and **Last event** (with its time). A small round **status dot** sits in front of the Bar line, the same three states as the tray icon: green when connected, grey while scanning or disconnected, red on an error. It is drawn, not an image. Buttons: **Install or repair hooks**, **Open log**, **Hide to tray**, **Quit**; **Retry** appears next to a red message when the engine is stopped or another daemon holds the port. The window is redrawn only when a line changes; it has no timer of its own.
 
 **Minimising** hides the window to the tray (no taskbar button) and so does the **X** button. Only **Quit** (button or tray menu) exits the app. Quitting runs the daemon's own shutdown: it sends the bar the "clear" (the bar goes to *No connection*), then frees the port.
 
@@ -76,13 +75,15 @@ Needs Python 3.10+ with the `py` launcher. From the repo:
 powershell -File host\tray\build-tray.ps1
 ```
 
-It creates `host\.venv-tray` if it is not there and installs `host\tray\requirements.txt` into it (never into the global Python), rebuilds the icons from the sprite headers (`host\tray\make_icons.py`), and runs PyInstaller on `host\tray\ClawdTank.spec` (onedir, windowed). The result is `host\tray\dist\ClawdTank\ClawdTank.exe` (about 2.5 MB, 36 MB with its folder; keep the folder together). `-Clean` removes `build\` and `dist\` first.
+It creates `host\.venv-tray` if it is not there and installs `host\tray\requirements.txt` into it (never into the global Python), rebuilds the icons from the sprite header (`host\tray\make_icons.py`), and runs PyInstaller on `host\tray\ClawdTank.spec` (onedir, windowed). The result is `host\tray\dist\ClawdTank\ClawdTank.exe` (about 2.5 MB, 36 MB with its folder; keep the folder together). `-Clean` removes this build's output and work folders first.
+
+To build next to a copy that is running, give another output folder: `powershell -File host\tray\build-tray.ps1 -OutDir dist-next` (relative to `host\tray`; the work folder becomes `build-dist-next`, or name it with `-WorkDir`). Nothing outside those two folders is touched, and the script stops before building if the `ClawdTank.exe` it would overwrite is running.
 
 Run it from source instead, with the venv's Python and no exe: `host\.venv-tray\Scripts\python.exe -m clawd_tank_tray` (from `host\`).
 
-**The art.** The sprites are clawd-tank's own (`firmware/main/assets/sprite_*.h`, read-only, RLE RGB565). `make_icons.py` decodes them into PNG strips and `clawd.ico` under `host\clawd_tank_tray\assets\`, so the app never parses a C header. When the headers change (new art), run `py -3 host\tray\make_icons.py` (or the build script, which does) and commit the assets; a test fails if they are stale. `--contact-sheet DIR` also writes sheets of every state at 16/24/32/64 px and of every animation frame. Small sizes are shrunk by block, taking the most common colour of each block, so the flat orange stays crisp and the eyes survive.
+**The art.** Clawd is clawd-tank's own sprite (`firmware/main/assets/sprite_idle.h`, read-only, RLE RGB565); only its first frame is used. `make_icons.py` decodes it into the three tray pictures at 16, 20, 24, 32, 40, 48 and 64 px (`assets\icons\idle-<size>.png`, `grey-...`, `error-...`) and into `clawd.ico` (the idle Clawd at those sizes and 256, for the exe and the window), under `host\clawd_tank_tray\assets\`, so the app never parses a C header. That is the whole of `assets\` (plus `icons.json`, which records where it came from); the exe carries the icons and the .ico only. When the header changes (new art), run `py -3 host\tray\make_icons.py` (or the build script, which does) and commit the assets; a test fails if they are stale. `--contact-sheet DIR` also writes sheets of the three states at 16/24/32/64 px, on dark and light backgrounds. Small sizes are shrunk by block, taking the most common colour of each block, so the flat orange stays crisp and the eyes survive.
 
-Tests (from `host\`, with the venv): `.venv-tray\Scripts\python.exe -m pytest`. The tray tests are `tests\test_tray_*.py` and `tests\test_daemon_embedded.py`. They never touch your bar, your `settings.json`, the real `Run` key or port 47421: the engine tests run the daemon without Bluetooth on a free port; `test_tray_smoke.py` starts the app (from source, and the exe if it is built) as a real process, with `CLAWD_TANK_NO_BLE=1`, a free port, and `USERPROFILE`, `LOCALAPPDATA` and the Claude folder in a temp directory. A tray icon appears for a few seconds while it runs.
+Tests (from `host\`, with the venv): `.venv-tray\Scripts\python.exe -m pytest`. The tray tests are `tests\test_tray_*.py` and `tests\test_daemon_embedded.py`. They never touch your bar, your `settings.json`, the real `Run` key or port 47421: the engine tests run the daemon without Bluetooth on a free port; `test_tray_smoke.py` starts the app (from source, and the exe if it is built) as a real process, with `CLAWD_TANK_NO_BLE=1`, a free port, and `USERPROFILE`, `LOCALAPPDATA` and the Claude folder in a temp directory. A tray icon appears for a few seconds while it runs. `CLAWD_TANK_TEST_EXE=<path to ClawdTank.exe>` points the smoke test at another build (for example one in `dist-next`); `CLAWD_TANK_TEST_EXE=none` skips the exe run.
 
 ## Uninstall
 
@@ -98,4 +99,4 @@ The Clawd sprites are from clawd-tank, MIT, Copyright (c) 2026 Marcio Granzotto 
 
 - The exe is unsigned (SmartScreen, above), and the first launch of a fresh build can take longer than later ones while Windows checks it.
 - Ending it any way but **Quit** (signing out, shutting down, killing it in Task Manager) skips the daemon's shutdown, so the bar is not sent the "clear" and may show Clawd's last state until its Bluetooth link drops.
-- With the thinking bubble and a few other pale props, the icon is outlined in grey so it shows on a light taskbar; on a dark one the outline is barely visible.
+- The icon shows the connection only. If you want to see that Claude Code is working, open the window or the tray menu (*Last event*); the bar itself still plays the animations.
