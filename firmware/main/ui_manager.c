@@ -23,10 +23,10 @@ typedef enum {
 } ui_state_t;
 
 /* Scene width beside the notification panel. 320 layout: 107 px, the panel takes the other 213.
- * Wide layout: the panel is NOTIF_PANEL_WIDTH_WIDE px and the scene keeps the rest (340 px on the
- * 640 x 172 MiniBar bar). Chosen at run time in ui_manager_init from the display width. */
+ * Wide layout: the panel is NOTIF_PANEL_WIDTH_WIDE px and the scene keeps the rest (460 px on the
+ * 640 x 172 MiniBar bar: three 153 px lanes). Chosen at run time in ui_manager_init from the display width. */
 #define SCENE_NOTIF_WIDTH_320   107
-#define NOTIF_PANEL_WIDTH_WIDE  300
+#define NOTIF_PANEL_WIDTH_WIDE  180     /* was 300, then 220: the cards never used it all; two lines still hold a message */
 #define SCENE_ANIM_MS           400
 
 /* ---------- Module state ---------- */
