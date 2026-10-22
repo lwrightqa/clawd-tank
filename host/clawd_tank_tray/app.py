@@ -2,8 +2,10 @@
 
 Threads
 -------
-* **main**: tkinter. Owns the window, every timer (`after`), the animation, and
-  all decisions. Nothing else may touch a widget.
+* **main**: tkinter. Owns the window, the two housekeeping timers (`after`: the
+  queue pump and the engine watchdog), and all decisions. Nothing else may touch
+  a widget. There is no animation and no timer for one: the tray icon is a still
+  picture that changes only when the connection state does.
 * **pystray**: the notification-area message loop (``run_detached``). Its menu
   callbacks only ``post()`` a message.
 * **engine**: the daemon's asyncio loop (engine.py). Its events are ``post()``ed.
@@ -11,14 +13,15 @@ Threads
 
 ``post()`` is a thread-safe queue; the main thread drains it every 100 ms
 (``after``), applies the events to one ``ViewState`` and, only when something
-changed, updates the tray icon, tooltip and window.
+changed, updates the tray icon, tooltip and window. The tray is told about a new
+icon or tooltip only when the connection state changed; what Claude is doing
+reaches the window and the menu as text and leaves the icon alone.
 """
 
 import logging
 import os
 import queue
 import threading
-import time
 import tkinter as tk
 from tkinter import messagebox
 from typing import Optional
@@ -34,7 +37,7 @@ from .icons import IconSet, tray_icon_size
 from .logsetup import tk_exception_handler
 from .options import Options, app_dir, log_path, settings_path
 from .single_instance import SingleInstance
-from .state import ONESHOT_SECONDS, EngineStatus, ViewState
+from .state import EngineStatus, ViewState
 from .tray_icon import ClawdTrayIcon, HiconCache
 from .window import MainWindow
 from .winutil import ErrorBoxes
@@ -43,7 +46,6 @@ logger = logging.getLogger("clawd-tank.tray.app")
 
 PUMP_MS = 100          # how often the UI thread drains the queue
 WATCHDOG_MS = 2000     # how often it checks that the engine thread is alive
-ANIM_MS = 333          # about 3 frames a second
 STARTUP_HOOK_CHECK_MS = 800
 QUIT_TIMEOUT_SECS = 10.0
 
@@ -88,11 +90,10 @@ class TrayApp:
         self._queue: "queue.Queue[tuple]" = queue.Queue()
         self._quitting = False       # Quit was asked for: the engine is being stopped
         self._quitting_done = False  # the engine has stopped: the loop is ending
-        self._sprite = ""
-        self._frame = 0
-        self._anim_job: Optional[str] = None
+        self._icon_name = ""         # the picture the tray shows (state.ICON_NAMES)
         self._tooltip = ""
         self._status_line = "Starting..."
+        self._event_line = ""        # the menu's "Last event: ..." line; empty = hidden
         self._can_retry = False
 
         self.root: Optional[tk.Tk] = None
@@ -178,10 +179,10 @@ class TrayApp:
 
     def _start_tray(self) -> None:
         try:
-            first = self.icons.frame("grey", 0, self._tray_size)
+            self._icon_name = self.view.icon_name()
             self.tray = ClawdTrayIcon(
-                "ClawdTank", icon=first, title="Clawd Tank", menu=self._build_menu(),
-                hicons=HiconCache())
+                "ClawdTank", icon=self.icons.icon(self._icon_name, self._tray_size),
+                title="Clawd Tank", menu=self._build_menu(), hicons=HiconCache())
 
             def ready(icon) -> None:
                 icon.visible = True
@@ -197,6 +198,8 @@ class TrayApp:
         return pystray.Menu(
             Item("Open", lambda: self.post("show"), default=True),
             Item(lambda item: self._status_line, None, enabled=False),
+            Item(lambda item: self._event_line, None, enabled=False,
+                 visible=lambda item: bool(self._event_line)),
             Item("Retry", lambda: self.post("retry"), visible=lambda item: self._can_retry),
             pystray.Menu.SEPARATOR,
             Item("Start with Windows", lambda: self.post("toggle_autostart"),
@@ -237,9 +240,7 @@ class TrayApp:
         if kind == "engine":
             name, data = payload
             self.view.apply(name, data)
-            if name == "oneshot":
-                self.root.after(int((ONESHOT_SECONDS + 0.1) * 1000), self.refresh)
-            return name in ("status", "connection", "display", "oneshot", "hook")
+            return name in ("status", "connection", "display", "hook")
         if kind == "show":
             logger.info("Show requested")
             self.window_show()
@@ -270,57 +271,36 @@ class TrayApp:
     # --- what is on screen ------------------------------------------------------
 
     def refresh(self) -> None:
-        """Bring the tray icon, its tooltip and the window in line with the state.
-        Cheap when nothing changed: each step compares first."""
-        now = time.time()
-        sprite = self.view.sprite(now)
-        if sprite != self._sprite:
-            self._sprite, self._frame = sprite, 0
-            self._cancel_anim()
-            self._show_frame()
-            if self.icons.is_animated(sprite):
-                self._anim_job = self.root.after(ANIM_MS, self._tick)
-        tooltip = self.view.tooltip(now)
+        """Bring the tray icon, its tooltip, the menu lines and the window in line
+        with the state. Cheap when nothing changed: each step compares first, and
+        the tray (a message to the shell) is only touched when the icon or the
+        tooltip is different. A display or hook event changes neither."""
+        name = self.view.icon_name()
+        if name != self._icon_name:
+            logger.info("Tray icon: %s", name)
+            self._icon_name = name
+            if self.tray is not None:
+                try:
+                    self.tray.icon = self.icons.icon(name, self._tray_size)
+                except Exception:
+                    logger.exception("could not update the tray icon")
+        tooltip = self.view.tooltip()
         if tooltip != self._tooltip and self.tray is not None:
             self._tooltip = tooltip
             self.tray.title = tooltip
-        self._status_line = tooltip.removeprefix("Clawd Tank: ")
+        self._status_line = self.view.status_text()
+        self._event_line = (f"Last event: {self.view.last_event_text()}"
+                            if self.view.last_event else "")
         self._can_retry = self.view.can_retry
         hs = self.hook_status
         self.window.render(self.view, hs.text if hs else "Checking...",
-                           hs.warning if hs else "", now)
-
-    def _cancel_anim(self) -> None:
-        if self._anim_job is not None:
-            self.root.after_cancel(self._anim_job)
-            self._anim_job = None
-
-    def _tick(self) -> None:
-        """One animation step: the next frame, once, into the tray and the window."""
-        self._anim_job = None
-        if self._quitting_done:
-            return
-        count = self.icons.frame_count(self._sprite)
-        if count > 1:
-            self._frame = (self._frame + 1) % count
-            self._show_frame()
-            self._anim_job = self.root.after(ANIM_MS, self._tick)
-
-    def _show_frame(self) -> None:
-        if self.tray is not None:
-            try:
-                self.tray.icon = self.icons.frame(self._sprite, self._frame, self._tray_size)
-            except Exception:
-                logger.exception("could not update the tray icon")
-        if self.window.visible:
-            self.window.set_frame(self._sprite, self._frame)
+                           hs.warning if hs else "")
 
     # --- window ---------------------------------------------------------------------
 
     def window_show(self) -> None:
         self.hook_status = self._safe_hook_status()  # the file may have changed since
         self.window.show()
-        self.window.set_frame(self._sprite or "grey", self._frame)
         self.refresh()
 
     def window_hide(self) -> None:
@@ -434,5 +414,4 @@ class TrayApp:
 
     def _finish_quit(self) -> None:
         self._quitting_done = True
-        self._cancel_anim()
         self.root.quit()  # mainloop returns; run() then cleans up

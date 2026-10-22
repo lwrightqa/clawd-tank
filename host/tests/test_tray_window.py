@@ -1,4 +1,4 @@
-"""The tkinter window: minimise/close hide it to the tray, the lines and the sprite.
+"""The tkinter window: minimise/close hide it to the tray; plain text lines and a status dot.
 
 The windows these tests make are fully transparent (alpha 0), so nothing shows on
 the desktop while they run."""
@@ -11,7 +11,7 @@ import pytest
 
 from clawd_tank_tray.icons import IconSet
 from clawd_tank_tray.state import CONFLICT_MESSAGE, ViewState
-from clawd_tank_tray.window import SPRITE_PX, ZOOM, MainWindow
+from clawd_tank_tray.window import BASE_WIDTH, DOT_COLOURS, DOT_OTHER, RED, MainWindow
 
 
 @pytest.fixture
@@ -62,6 +62,12 @@ def buttons(widget):
     return out
 
 
+def walk(widget):
+    yield widget
+    for child in widget.winfo_children():
+        yield from walk(child)
+
+
 def running(**kw):
     v = ViewState(**kw)
     v.apply("status", {"status": "running"})
@@ -69,10 +75,14 @@ def running(**kw):
     return v
 
 
+# --- size and buttons -----------------------------------------------------------------------
+
+
 def test_title_size_and_buttons(root, win, calls):
+    win.show()
     root.update()
     assert root.title() == "Clawd Tank"
-    assert root.geometry().startswith("360x300")
+    assert root.geometry().startswith(f"{BASE_WIDTH}x")
     assert root.resizable() == (False, False) or root.resizable() == (0, 0)
     btns = buttons(root)
     assert {"Install or repair hooks", "Open log", "Hide to tray", "Quit", "Retry"} <= set(btns)
@@ -80,6 +90,86 @@ def test_title_size_and_buttons(root, win, calls):
                          ("Hide to tray", "hide"), ("Quit", "quit")):
         btns[text].invoke()
         assert calls[-1] == action
+
+
+def test_the_window_is_sized_to_its_content_with_no_empty_column(root, win):
+    win.show()
+    root.update()
+    assert root.winfo_height() == win._outer.winfo_reqheight()   # as tall as its content needs
+    assert root.winfo_height() < 300 and root.winfo_width() == BASE_WIDTH
+    # the first label starts at the left edge: nothing is reserved for a picture there
+    heading = next(w for w in walk(root) if isinstance(w, ttk.Label) and w.cget("text") == "Bar")
+    assert heading.winfo_rootx() - root.winfo_rootx() < 30
+
+
+def test_everything_fits_inside_the_window_even_with_a_red_message_and_retry(root, win):
+    v = running()
+    v.apply("status", {"status": "conflict", "message": CONFLICT_MESSAGE + " (port 47421 is in use)"})
+    win.render(v, "Not installed", "")
+    win.show()
+    root.update()
+    height, width = root.winfo_height(), root.winfo_width()
+    for widget in list(buttons(root).values()) + [win._problem, win._dot]:
+        assert widget.winfo_ismapped(), widget
+        x, y = widget.winfo_rootx() - root.winfo_rootx(), widget.winfo_rooty() - root.winfo_rooty()
+        assert 0 <= x and x + widget.winfo_width() <= width, widget
+        assert 0 <= y and y + widget.winfo_height() <= height, widget
+    assert root.winfo_height() == height  # the message appearing did not resize it
+
+
+# --- no picture, no timer ---------------------------------------------------------------------
+
+
+def test_the_window_has_no_picture_at_all(root, calls):
+    images_before = set(root.tk.call("image", "names"))   # Tk's own message-box icons
+    actions = {n: (lambda: None) for n in ("install", "open_log", "hide", "quit", "retry")}
+    win = MainWindow(root, IconSet(), actions, scale=1.0)
+    win.render(running(), "Installed", "")
+    win.show()
+    root.update()
+    assert set(root.tk.call("image", "names")) == images_before, "the window made a tk image"
+    canvases = [w for w in walk(root) if isinstance(w, tk.Canvas)]
+    assert canvases == [win._dot], "the only graphic is the status dot"
+    assert [win._dot.type(i) for i in win._dot.find_all()] == ["oval"]   # drawn, not an image
+    for w in walk(root):
+        if isinstance(w, (tk.Label, ttk.Label)):
+            assert not str(w.cget("image")), f"{w} shows an image"
+    assert not any(isinstance(v, tk.PhotoImage) for v in vars(win).values())
+    assert not hasattr(win, "image") and not hasattr(win, "set_frame")
+
+
+def test_the_window_schedules_no_timer_while_rendering(root, monkeypatch):
+    pending_before = set(root.tk.call("after", "info"))
+    scheduled = []
+    real_after = root.after
+    monkeypatch.setattr(root, "after", lambda *a, **k: scheduled.append(a) or real_after(*a, **k))
+    actions = {n: (lambda: None) for n in ("install", "open_log", "hide", "quit", "retry")}
+    win = MainWindow(root, IconSet(), actions, scale=1.0)
+    v = running()
+    for step in range(5):
+        win.render(v, "Installed", "")
+        v.apply("display", {"state": {"anims": ["thinking", "typing"][: step % 3], "ids": [0, 1]}})
+        v.apply("hook", {"msg": {"event": "tool_use", "tool_name": "Bash"}}, now=1_700_000_000.0 + step)
+    v.apply("connection", {"connected": False})
+    win.render(v, "Installed", "")
+    v.apply("status", {"status": "conflict", "message": "x"})
+    win.render(v, "Installed", "")
+    root.update()
+    assert scheduled == [], f"after() was called: {scheduled}"
+    assert set(root.tk.call("after", "info")) == pending_before, "a timer is pending in Tk"
+
+
+def test_show_uses_one_single_shot_after_and_nothing_repeats(root, win, monkeypatch):
+    scheduled = []
+    real_after = root.after
+    monkeypatch.setattr(root, "after", lambda *a, **k: scheduled.append(a[0]) or real_after(*a, **k))
+    pending_before = set(root.tk.call("after", "info"))
+    win.show()
+    assert scheduled == [300]   # un-pins the window from the top once; no repeating timer
+    assert pump(root, lambda: set(root.tk.call("after", "info")) == pending_before)
+
+
+# --- hiding to the tray -----------------------------------------------------------------------
 
 
 def test_the_close_button_hides_to_the_tray_and_does_not_quit(root, win, calls):
@@ -114,6 +204,9 @@ def test_show_brings_it_back_from_withdrawn_and_from_minimised(root, win):
     assert pump(root, lambda: root.state() == "normal" and win.visible)
 
 
+# --- the lines and the dot --------------------------------------------------------------------
+
+
 def test_render_sets_the_status_lines(root, win):
     v = running()
     v.apply("display", {"state": {"anims": ["thinking", "idle"], "ids": [0, 1]}})
@@ -122,9 +215,34 @@ def test_render_sets_the_status_lines(root, win):
     assert win._lines["bar"].cget("text") == "Connected"
     assert win._lines["hooks"].cget("text") == "Installed"
     assert win._lines["claude"].cget("text") == "2 active sessions"
-    assert win._detail.cget("text").startswith("Last event: tool_use Bash, ")
-    assert win.caption.cget("text") == "Thinking"
+    assert win._lines["event"].cget("text").startswith("tool_use Bash, ")
     assert win._problem.cget("text") == ""
+    assert not hasattr(win, "caption")
+
+
+def test_the_status_dot_follows_the_tray_icon_state(root, win):
+    green, grey = DOT_COLOURS["idle"], DOT_OTHER
+
+    def fill():
+        return win._dot.itemcget(win._dot_item, "fill")
+
+    assert fill() == grey                                   # nothing known yet
+    v = ViewState()
+    v.apply("status", {"status": "running"})                # scanning for the bar
+    win.render(v, "Installed", "")
+    assert fill() == grey
+    v.apply("connection", {"connected": True})              # connected
+    win.render(v, "Installed", "")
+    assert fill() == green
+    v.apply("display", {"state": {"anims": ["alert"], "ids": [0]}})   # Claude needs you: still green
+    win.render(v, "Installed", "")
+    assert fill() == green
+    v.apply("connection", {"connected": False})             # the link dropped
+    win.render(v, "Installed", "")
+    assert fill() == grey
+    v.apply("status", {"status": "conflict", "message": "x"})   # error
+    win.render(v, "Installed", "")
+    assert fill() == DOT_COLOURS["error"] == RED
 
 
 def test_render_touches_only_what_changed(root, win, monkeypatch):
@@ -133,9 +251,18 @@ def test_render_touches_only_what_changed(root, win, monkeypatch):
     touched = []
     for key, label in win._lines.items():
         orig = label.configure
-        monkeypatch.setattr(label, "configure", lambda *a, _o=orig, _k=key, **k: (touched.append(_k), _o(*a, **k))[1])
+        monkeypatch.setattr(label, "configure",
+                            lambda *a, _o=orig, _k=key, **k: (touched.append(_k), _o(*a, **k))[1])
+    dot_touched = []
+    orig_dot = win._dot.itemconfigure
+    monkeypatch.setattr(win._dot, "itemconfigure",
+                        lambda *a, **k: (dot_touched.append(a), orig_dot(*a, **k))[1])
     win.render(v, "Installed", "")
-    assert touched == []  # same state: no widget work
+    assert touched == [] and dot_touched == []   # same state: no widget work
+    v.apply("display", {"state": {"anims": ["typing"], "ids": [0]}})
+    win.render(v, "Installed", "")
+    assert touched == ["claude"] and dot_touched == []   # Claude's activity is text only
+    touched.clear()
     win.render(v, "Not installed", "")
     assert touched == ["hooks"]
 
@@ -163,41 +290,9 @@ def test_a_hook_warning_such_as_a_missing_py_launcher_is_shown(root, win):
     assert "py launcher" in win._problem.cget("text")
 
 
-def test_the_sprite_is_a_3x_enlargement_and_cached(root, win):
-    win.set_frame("thinking", 2)
-    photo = win._photos[("thinking", 2)]
-    assert (photo.width(), photo.height()) == (SPRITE_PX * ZOOM, SPRITE_PX * ZOOM) == (144, 144)
-    assert str(win.image.cget("image")[0]) == str(photo)  # and it is the one on the label
-    assert len(win._photos) == 1
-    win.set_frame("thinking", 2)  # the same frame again: nothing to do
-    assert len(win._photos) == 1
-    win.set_frame("thinking", 3)
-    assert len(win._photos) == 2
-    win.set_frame("thinking", 3 + IconSet().frame_count("thinking"))  # wraps to a cached frame
-    assert len(win._photos) == 2
-
-
-def test_the_sprite_is_crisp_each_source_pixel_becomes_a_3x3_block(root, win):
-    icons = IconSet()
-    win.set_frame("idle", 0)
-    photo = win._photos[("idle", 0)]
-    src = icons.frame("idle", 0, SPRITE_PX)
-    # find an opaque pixel and compare the 3x3 block at its position
-    for y in range(SPRITE_PX):
-        for x in range(SPRITE_PX):
-            if src.getpixel((x, y))[3] == 255:
-                r, g, b, _ = src.getpixel((x, y))
-                want = "#%02x%02x%02x" % (r, g, b)
-                for dy in range(ZOOM):
-                    for dx in range(ZOOM):
-                        got = photo.get(x * ZOOM + dx, y * ZOOM + dy)
-                        assert tuple(got[:3]) == (r, g, b), (x, y, dx, dy, want)
-                return
-    pytest.fail("no opaque pixel in the idle frame")
-
-
 def test_scaled_window_for_high_dpi(root, calls):
     actions = {n: (lambda: None) for n in ("install", "open_log", "hide", "quit", "retry")}
-    MainWindow(root, IconSet(), actions, scale=1.5)
+    win = MainWindow(root, IconSet(), actions, scale=1.5)
+    win.show()
     root.update()
-    assert root.geometry().startswith("540x450")
+    assert root.geometry().startswith(f"{round(BASE_WIDTH * 1.5)}x")

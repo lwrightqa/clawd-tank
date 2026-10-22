@@ -57,14 +57,15 @@ def selftest() -> int:
         return f"hook command {hooks.HOOK_COMMAND}"
 
     def assets_check():
-        from .icons import SPRITES, SIZES, IconSet
+        from .icons import SIZES, IconSet
+        from .state import ICON_NAMES
         icons = IconSet()
-        for name in SPRITES:
+        for name in ICON_NAMES:
             for size in SIZES:
-                icons.frame(name, 0, size)
+                icons.icon(name, size)
         if not icons.ico_path.is_file():
             raise FileNotFoundError(icons.ico_path)
-        return f"{len(SPRITES)} sprites, {icons.ico_path.name}"
+        return f"{len(ICON_NAMES)} tray icons, {icons.ico_path.name}"
 
     def tray_check():
         import pystray  # noqa: F401

@@ -2,18 +2,19 @@
 
 import pytest
 
-from clawd_tank_daemon.daemon import TOOL_ANIMATION_MAP, ClawdDaemon
-from clawd_tank_tray.icons import SPRITES
 from clawd_tank_tray.state import (
-    ANIM_PRIORITY,
-    ANIM_SPRITES,
     CONFLICT_MESSAGE,
-    ONESHOT_SECONDS,
+    ICON_CONNECTED,
+    ICON_DISCONNECTED,
+    ICON_ERROR,
+    ICON_NAMES,
     EngineStatus,
     ViewState,
     describe_hook,
-    pick_anim,
 )
+
+EVERY_ANIM = ["idle", "thinking", "typing", "debugger", "building", "conducting", "wizard",
+              "beacon", "confused", "sweeping", "happy", "alert", "dizzy"]
 
 
 def running(ble=True, connected=True, **kw) -> ViewState:
@@ -29,89 +30,86 @@ def show(v: ViewState, *anims, **extra) -> ViewState:
     return v
 
 
-# --- the sprite for each state --------------------------------------------------------------
+# --- the icon for each state: connection only -------------------------------------------------
 
 
-def test_connected_and_idle_is_the_idle_sprite():
-    assert show(running(), "idle").sprite() == "idle"
+def test_three_icons_and_their_asset_names():
+    assert ICON_NAMES == ("idle", "grey", "error")
+    assert (ICON_CONNECTED, ICON_DISCONNECTED, ICON_ERROR) == ICON_NAMES
 
 
-def test_connected_with_no_session_is_the_sleeping_sprite():
+def test_connected_is_the_idle_icon():
+    assert running().icon_name() == ICON_CONNECTED
+
+
+@pytest.mark.parametrize("anim", EVERY_ANIM)
+def test_connected_is_the_same_icon_whatever_claude_is_doing(anim):
+    assert show(running(), anim).icon_name() == ICON_CONNECTED
+    assert show(running(), "idle", anim, "thinking").icon_name() == ICON_CONNECTED
+
+
+def test_no_session_one_session_or_many_is_the_same_icon():
     v = running()
     v.apply("display", {"state": {"status": "sleeping"}})
-    assert v.sprite() == "sleeping"
-    assert running().sprite() == "sleeping"  # the default display state is sleeping
+    assert v.icon_name() == ICON_CONNECTED
+    show(v, "alert", "dizzy", overflow=3)
+    assert v.icon_name() == ICON_CONNECTED
 
 
-@pytest.mark.parametrize("anim", [a for a in ANIM_SPRITES if a != "idle"])
-def test_each_working_animation_has_its_own_sprite(anim):
-    assert show(running(), anim).sprite() == ANIM_SPRITES[anim] == anim
+def test_display_and_hook_events_never_change_the_icon():
+    v = running()
+    before = v.icon_name()
+    for anim in EVERY_ANIM:
+        show(v, anim)
+        v.apply("hook", {"msg": {"event": "tool_use", "tool_name": "Bash", "project": "p"}})
+        v.apply("oneshot", {"anim": "sweeping"})   # the daemon still sends these; ignored
+        v.apply("notifications", {"count": 2})
+        assert v.icon_name() == before == ICON_CONNECTED
 
 
 def test_scanning_or_disconnected_is_greyed():
-    assert running(connected=False).sprite() == "grey"          # scanning
+    assert running(connected=False).icon_name() == ICON_DISCONNECTED   # scanning
     v = show(running(), "thinking")
     v.apply("connection", {"connected": False, "transport": "ble"})
-    assert v.sprite() == "grey"                                 # the link dropped
-    assert ViewState().sprite() == "grey"                       # engine not started
+    assert v.icon_name() == ICON_DISCONNECTED                          # the link dropped
+    assert ViewState().icon_name() == ICON_DISCONNECTED                # engine not started
     v = ViewState()
     v.apply("status", {"status": "starting"})
-    assert v.sprite() == "grey"
+    assert v.icon_name() == ICON_DISCONNECTED
+
+
+def test_greyed_stays_greyed_whatever_claude_is_doing():
+    for anim in EVERY_ANIM:
+        assert show(running(connected=False), anim).icon_name() == ICON_DISCONNECTED
 
 
 @pytest.mark.parametrize("status", ["conflict", "error"])
-def test_port_in_use_and_a_dead_engine_are_the_error_sprite(status):
+def test_port_in_use_and_a_dead_engine_are_the_error_icon(status):
     v = show(running(), "thinking")
     v.apply("status", {"status": status, "message": "x"})
-    assert v.sprite() == "error"
+    assert v.icon_name() == ICON_ERROR
     assert not v.bar_connected  # nothing is connected through a dead engine
 
 
-def test_without_ble_the_icon_follows_claude_not_the_bar():
+def test_the_error_icon_wins_over_a_stale_connection():
+    v = running()
+    v.apply("connection", {"connected": True})
+    v.apply("status", {"status": "conflict", "message": CONFLICT_MESSAGE})
+    assert v.icon_name() == ICON_ERROR
+
+
+def test_without_ble_the_icon_is_the_connected_one():
     v = ViewState(ble_enabled=False)
     v.apply("status", {"status": "running"})
-    assert v.sprite() == "sleeping"
-    assert show(v, "building").sprite() == "building"
+    assert v.icon_name() == ICON_CONNECTED
+    assert show(v, "building").icon_name() == ICON_CONNECTED
     assert v.bar_text() == "Bluetooth off (test mode)"
 
 
-def test_several_sessions_show_the_most_important_animation():
-    assert pick_anim(["idle", "thinking", "typing"]) == "typing"
-    assert pick_anim(["thinking", "alert", "building"]) == "alert"
-    assert pick_anim(["confused", "building"]) == "confused"
-    assert pick_anim(["idle", "dizzy"]) == "dizzy"
-    assert pick_anim([]) == "idle" and pick_anim(["nonsense"]) == "idle"
-    assert show(running(), "idle", "thinking").sprite() == "thinking"
-    assert set(ANIM_PRIORITY) == set(ANIM_SPRITES)
-
-
-def test_compact_plays_sweeping_for_a_few_seconds_then_falls_back():
-    v = show(running(), "thinking")
-    v.apply("oneshot", {"anim": "sweeping"}, now=100.0)
-    assert v.sprite(now=100.5) == "sweeping" and v.oneshot_active(100.5)
-    assert v.sprite(now=100.0 + ONESHOT_SECONDS + 0.1) == "thinking"
-    assert not v.oneshot_active(100.0 + ONESHOT_SECONDS + 0.1)
-    v.apply("oneshot", {"anim": "not-an-animation"}, now=200.0)
-    assert not v.oneshot_active(200.1)
-
-
-def test_every_animation_the_daemon_can_report_has_a_sprite(tmp_path):
-    """Drive the real daemon's display logic through every session state."""
-    d = ClawdDaemon(headless=False, sessions_path=tmp_path / "s.json")
-    seen = set()
-    cases = [
-        {"state": "waiting"}, {"state": "thinking"}, {"state": "confused"},
-        {"state": "error"}, {"state": "idle"}, {"state": "registered"},
-        {"state": "working", "subagents": {"a"}},
-    ] + [{"state": "working", "tool_name": t} for t in list(TOOL_ANIMATION_MAP) + ["mcp__x__y", "Whatever"]]
-    for i, case in enumerate(cases):
-        d._session_states = {"s": dict(case)}
-        d._session_order = [("s", i)]
-        seen.update(d._compute_display_state()["anims"])
-    assert seen <= set(ANIM_SPRITES), seen - set(ANIM_SPRITES)
-    assert {"building", "typing", "debugger", "conducting", "wizard", "beacon", "thinking",
-            "confused", "alert", "dizzy", "idle"} <= seen
-    assert set(ANIM_SPRITES.values()) <= set(SPRITES)
+def test_the_state_has_nothing_left_of_the_animations():
+    v = ViewState()
+    for gone in ("sprite", "caption", "oneshot", "oneshot_until", "oneshot_active"):
+        assert not hasattr(v, gone), gone
 
 
 # --- the status lines ---------------------------------------------------------------------
@@ -162,20 +160,46 @@ def test_problem_line_and_retry():
     assert v.problem() == "" and not v.can_retry
 
 
-def test_tooltip_fits_windows_limit_and_says_something_useful():
+def test_status_text_says_what_is_going_on_in_words():
+    assert ViewState().status_text() == "Starting..."
+    v = ViewState()
+    v.apply("status", {"status": "starting"})
+    assert v.status_text() == "Starting..."
+    v.apply("status", {"status": "running"})
+    assert v.status_text() == "Scanning for the bar..."
+    v.apply("connection", {"connected": True})
+    assert v.status_text() == "Connected to Clawd Tank"
+    show(v, "building")
+    assert v.status_text() == "Connected to Clawd Tank"   # Claude's activity is not in it
+    v.apply("connection", {"connected": False})
+    assert v.status_text() == "Scanning for the bar..."
+    v.apply("status", {"status": "conflict", "message": CONFLICT_MESSAGE + " (port 1 is in use)"})
+    assert v.status_text() == CONFLICT_MESSAGE
+    v.apply("status", {"status": "error", "message": "The engine crashed: boom"})
+    assert "stopped" in v.status_text().lower() and "restart" in v.status_text().lower()
+    off = ViewState(ble_enabled=False)
+    off.apply("status", {"status": "running"})
+    assert off.status_text() == "Bluetooth off (test mode)"
+
+
+def test_tooltip_fits_windows_limit_and_follows_the_connection_only():
     v = running()
     assert "connected" in v.tooltip().lower()
-    show(v, "thinking")
-    assert "thinking" in v.tooltip().lower()
+    tip = v.tooltip()
+    for anim in EVERY_ANIM:
+        show(v, anim)
+        v.apply("hook", {"msg": {"event": "tool_use", "tool_name": "Bash"}})
+        assert v.tooltip() == tip, "the tooltip must not change with Claude's activity"
     v.apply("status", {"status": "conflict", "message": CONFLICT_MESSAGE})
     assert "another clawd tank daemon" in v.tooltip().lower()
+    assert "scanning" in running(connected=False).tooltip().lower()
     for state in (v, ViewState(), running(connected=False)):
         assert len(state.tooltip()) <= 127
 
 
 def test_unknown_events_are_ignored():
     v = running()
-    before = v.sprite()
+    before = v.icon_name()
     v.apply("who-knows", {"x": 1})
     v.apply("notifications", {"count": 3})
-    assert v.sprite() == before and v.engine == EngineStatus.RUNNING
+    assert v.icon_name() == before and v.engine == EngineStatus.RUNNING

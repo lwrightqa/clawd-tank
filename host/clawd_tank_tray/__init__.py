@@ -10,10 +10,10 @@ Module map (see host/TRAY.md for the user's side):
     __main__.py         command line, single instance, logging, starts the app
     app.py              TrayApp: ties the tray icon, the window and the engine together
     engine.py           DaemonEngine: the daemon in a thread, restart, stop, port-in-use
-    state.py            ViewState: daemon events -> sprite, status lines (pure, no GUI)
-    icons.py            the Clawd frames (built by host/tray/make_icons.py)
-    tray_icon.py        the pystray icon: native HICON per frame, menu refresh on open
-    window.py           the tkinter window
+    state.py            ViewState: daemon events -> icon state, status lines (pure, no GUI)
+    icons.py            the three tray pictures (built by host/tray/make_icons.py)
+    tray_icon.py        the pystray icon: one native HICON per state, menu refresh on open
+    window.py           the tkinter window (text and a status dot, no picture)
     hookctl.py          Claude Code hooks: status, consent text, install, remove
     autostart.py        "Start with Windows" (HKCU Run key)
     single_instance.py  named mutex + named events (show, quit)

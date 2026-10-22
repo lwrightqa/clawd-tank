@@ -3,10 +3,10 @@
 pystray's Windows backend turns every image you give it into a temporary .ico
 file and loads it at the *system default icon size* (32 px), then Windows
 shrinks that to the 16 px (or 20/24 px) the tray wants: a file written and read
-for every animation frame, and a blurry result for pixel art. Here each frame
-becomes a native HICON once, at exactly the size the tray asks for, from the
-pre-scaled frames; changing the picture is then one NIM_MODIFY message with a
-cached handle, and nothing at all happens while the picture stays the same.
+for every change, and a blurry result for pixel art. Here each of the three
+pictures becomes a native HICON once, at exactly the size the tray asks for,
+from the pre-scaled PNGs; changing the picture is then one NIM_MODIFY message
+with a cached handle, and nothing at all happens while the picture stays the same.
 
 Two other changes: the menu is rebuilt just before it opens, so its checkbox
 and status line show the state of that moment (the Start with Windows box reads
@@ -112,7 +112,8 @@ def destroy_hicon(hicon: int) -> None:
 
 
 class HiconCache:
-    """One HICON per image object, made on first use and kept until ``clear``."""
+    """One HICON per image object (so one per tray state), made on first use and
+    kept until ``clear``."""
 
     def __init__(self) -> None:
         self._handles: Dict[int, Tuple[Image.Image, int]] = {}
