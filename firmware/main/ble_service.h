@@ -29,6 +29,7 @@ typedef enum {
     BLE_EVT_SET_SESSIONS,
     BLE_EVT_CONNECTED,
     BLE_EVT_DISCONNECTED,
+    BLE_EVT_SCREEN_TOGGLE,      /* the PWR key: switch the screen off, or back on (posted by button.c, not BLE) */
 } ble_evt_type_t;
 
 typedef struct {

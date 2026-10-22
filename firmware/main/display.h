@@ -13,4 +13,8 @@ lv_display_t *display_init(void);
 // enable line on the expander; before the first frame it only records the level.
 void display_set_brightness(uint8_t duty);
 
+// Switch the screen off (the backlight goes dark and stays dark whatever brightness is set) or back on at the
+// last level set. The PWR key toggles this.
+void display_set_screen_off(bool off);
+
 #endif // DISPLAY_H

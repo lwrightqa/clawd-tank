@@ -55,6 +55,7 @@ static scene_t *s_scene = NULL;
 static notification_ui_t *s_notif_ui = NULL;
 
 static bool s_connected = false;
+static bool s_screen_off = false;       /* the PWR key switched the screen off */
 static uint32_t s_last_activity_tick = 0;
 static display_status_t s_display_status = DISPLAY_STATUS_IDLE;
 static int s_last_minute = -1;
@@ -215,6 +216,14 @@ void ui_manager_handle_event(const ble_evt_t *evt)
             s_display_status = DISPLAY_STATUS_IDLE;
         }
         transition_to(UI_STATE_DISCONNECTED);
+        break;
+
+    case BLE_EVT_SCREEN_TOGGLE:
+        /* The PWR key. Off stays off until the key is pressed again: notifications and Claude's activity keep
+         * updating the scene, but never light the backlight. */
+        s_screen_off = !s_screen_off;
+        display_set_screen_off(s_screen_off);
+        ESP_LOGI(TAG, "PWR key: screen %s", s_screen_off ? "off" : "on");
         break;
 
     case BLE_EVT_NOTIF_ADD:
