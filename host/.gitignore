@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .venv-host/
+
+# Clawd Tank tray app (host/tray/build-tray.ps1)
+.venv-tray/
