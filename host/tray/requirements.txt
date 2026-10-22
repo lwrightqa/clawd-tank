@@ -1,0 +1,8 @@
+# Clawd Tank for Windows: what host/tray/build-tray.ps1 installs into host/.venv-tray
+bleak>=0.22,<4
+pystray>=0.19
+pillow>=10
+pyinstaller>=6
+# tests (python -m pytest, from host/)
+pytest>=7
+pytest-asyncio>=0.21
