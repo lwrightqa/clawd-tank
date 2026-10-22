@@ -443,6 +443,28 @@ def test_the_tooltip_is_set_when_the_connection_changes_and_not_otherwise(live):
     assert live.tray.title_updates[-1] == "Clawd Tank: Scanning for the bar..."
 
 
+def test_open_log_button_and_menu_item_open_the_file_the_log_is_written_to(ctx, monkeypatch):
+    from pathlib import Path
+
+    from clawd_tank_tray.options import log_path
+    from clawd_tank_tray.logsetup import setup_logging
+
+    import logging
+    level = logging.getLogger().level
+    handler = setup_logging(log_path())          # what main() does, in this temp LOCALAPPDATA
+    try:
+        opened = []
+        monkeypatch.setattr(os, "startfile", lambda p: opened.append(p), raising=False)
+        ctx._handle("open_log", None)             # the tray menu item posts this message
+        ctx._window_actions()["open_log"]()       # the window's button
+        assert [Path(p) for p in opened] == [Path(handler.baseFilename)] * 2
+        assert Path(handler.baseFilename).name == "tray.log"
+    finally:
+        logging.getLogger().removeHandler(handler)
+        logging.getLogger().setLevel(level)
+        handler.close()
+
+
 def test_open_log_opens_the_log_in_local_app_data(ctx, monkeypatch, tmp_path):
     opened = []
     monkeypatch.setattr(os, "startfile", lambda p: opened.append(p), raising=False)

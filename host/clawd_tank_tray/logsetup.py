@@ -3,13 +3,15 @@ up there (and in one message box) instead of in a console nobody can see.
 
 ``%LOCALAPPDATA%\\ClawdTank\\tray.log``, 1 MB per file, 3 old files kept. The
 daemon's own loggers (``clawd-tank``, ``clawd-tank.ble``, ...) propagate to the
-root logger, so its lines land in the same file.
+root logger, so its lines land in the same file. Rotation never costs a line: see
+``SafeRotatingFileHandler``.
 """
 
 import logging
 import os
 import sys
 import threading
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -18,16 +20,61 @@ from .winutil import ErrorBoxes
 FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 MAX_BYTES = 1_000_000
 BACKUPS = 3
+ROTATE_RETRY_SECONDS = 30.0
 
 logger = logging.getLogger("clawd-tank.tray")
+
+
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """A RotatingFileHandler that never loses a line because rotating failed.
+
+    The standard one rotates *before* it writes, and on Windows the rename fails
+    with a sharing violation whenever another program has the log open (Notepad
+    after "Open log", an editor, ``Get-Content -Wait``, a virus scanner). That
+    exception aborts the write, ``handleError`` swallows it (a windowed app has no
+    stderr), and every later line fails the same way: the app runs normally and
+    its log goes silent. Here a failed rotation keeps the current file, writes the
+    line anyway, notes the problem in the log, and tries again after
+    ``ROTATE_RETRY_SECONDS``; the file just grows a little past ``maxBytes`` until
+    the other program lets go."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._retry_at = 0.0
+        self.rotation_failures = 0
+
+    def shouldRollover(self, record) -> bool:
+        if time.monotonic() < self._retry_at:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except OSError as e:
+            self.rotation_failures += 1
+            self._retry_at = time.monotonic() + ROTATE_RETRY_SECONDS
+            try:
+                if self.stream is None:        # the failed attempt had closed it
+                    self.stream = self._open()
+                note = logging.LogRecord(
+                    "clawd-tank.tray.logsetup", logging.WARNING, __file__, 0,
+                    "Could not rotate %s (%s); another program probably has it open. "
+                    "Logging continues in this file; trying again in %d s",
+                    (self.baseFilename, e, ROTATE_RETRY_SECONDS), None)
+                logging.FileHandler.emit(self, note)
+            except Exception:
+                pass                           # the line that follows will report any real fault
+        else:
+            self._retry_at = 0.0
 
 
 def setup_logging(path: Path, debug: bool = False) -> RotatingFileHandler:
     """Log to `path` (created with its folder). Replaces a handler this function
     installed earlier, so calling it twice does not duplicate lines."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(path, maxBytes=MAX_BYTES, backupCount=BACKUPS,
-                                  encoding="utf-8")
+    handler = SafeRotatingFileHandler(path, maxBytes=MAX_BYTES, backupCount=BACKUPS,
+                                      encoding="utf-8")
     handler.setFormatter(logging.Formatter(FORMAT))
     handler._clawd_tray = True  # type: ignore[attr-defined]
     root = logging.getLogger()
