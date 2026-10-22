@@ -84,6 +84,7 @@ static uint32_t s_flush_errors;
 static bool s_ledc_ok;
 static bool s_frame_shown;          /* the first frame has reached the panel */
 static uint8_t s_brightness;        /* 0..255 as the rest of the firmware sees it; 0 = off */
+static volatile bool s_screen_off;  /* the PWR key switched the screen off: the backlight stays dark whatever the level */
 static int s_bl_duty_now = -1;
 
 /* ---------- Backlight ---------- */
@@ -139,9 +140,17 @@ static void bl_init_pwm(void)
 void display_set_brightness(uint8_t duty)
 {
     s_brightness = duty;
-    if (!s_frame_shown) return;     /* the first flush applies it */
+    if (!s_frame_shown || s_screen_off) return;     /* the first flush applies it; a screen switched off stays dark */
     bl_write(duty);
     ESP_LOGI(TAG, "Brightness set to %u", duty);
+}
+
+void display_set_screen_off(bool off)
+{
+    s_screen_off = off;
+    if (!s_frame_shown) return;
+    bl_write(off ? 0 : s_brightness);   /* back on at the level the firmware last asked for (the sleeping dim included) */
+    ESP_LOGI(TAG, "Screen %s", off ? "off" : "on");
 }
 
 /* ---------- Panel ---------- */
@@ -245,7 +254,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
     if (s_panel_ok && send_frame(frame)) {
         if (!s_frame_shown) {
             s_frame_shown = true;
-            bl_write(s_brightness);
+            bl_write(s_screen_off ? 0 : s_brightness);
             ESP_LOGI(TAG, "first frame shown, backlight %u/255", s_brightness);
         }
     } else if (s_panel_ok && (s_flush_errors++ % 100) == 0) {
