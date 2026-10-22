@@ -33,6 +33,12 @@ def pixels(img: Image.Image):
     return list(zip(raw[0::4], raw[1::4], raw[2::4], raw[3::4]))
 
 
+def visible(img: Image.Image):
+    """pixels(), with every fully transparent pixel normalised to (0, 0, 0, 0): the
+    colour under alpha 0 is not part of the picture."""
+    return [(0, 0, 0, 0) if p[3] == 0 else p for p in pixels(img)]
+
+
 def opaque(img: Image.Image) -> int:
     return sum(1 for a in img.getchannel("A").tobytes() if a > 0)
 
@@ -130,15 +136,63 @@ def test_idle_is_the_orange_clawd(icons):
 # --- from the C headers ----------------------------------------------------------------
 
 
-def test_decoder_reads_the_real_idle_header():
+SYNTHETIC_HEADER = """
+#define TEST_WIDTH  4
+#define TEST_HEIGHT 2
+#define TEST_FRAME_COUNT 2
+static const uint32_t test_frame_offsets[3] = {
+    0, 4, 10,
+};
+static const uint16_t test_rle_data[] = {
+    0x18C5,3, 0xD40C,5,
+    0xD40C,2, 0x0000,1, 0x18C5,5,
+};
+"""
+
+
+def test_decoder_is_exact_on_a_hand_made_header(tmp_path):
+    """RLE (value, count) pairs, frame offsets with a sentinel, 0x18C5 transparent."""
+    (tmp_path / "sprite_test.h").write_text(SYNTHETIC_HEADER, encoding="utf-8")
+    sp = make_icons.load_sprite("test", tmp_path)
+    assert (sp.width, sp.height, sp.frame_count) == (4, 2, 2)
+    body = make_icons.rgb565_to_rgb888(0xD40C)
+    assert body == (214, 130, 99)  # expanded the way rle_decode_argb8888() does
+    f0 = visible(sp.frame(0))
+    assert f0 == [(0, 0, 0, 0)] * 3 + [body + (255,)] * 5
+    f1 = visible(sp.frame(1))
+    assert f1 == [body + (255,)] * 2 + [(0, 0, 0, 255)] + [(0, 0, 0, 0)] * 5
+    assert make_icons.rgb565_to_rgb888(0xFFFF) == (255, 255, 255)
+    assert make_icons.rgb565_to_rgb888(0x0000) == (0, 0, 0)
+
+
+def test_a_truncated_offset_table_is_refused(tmp_path):
+    (tmp_path / "sprite_test.h").write_text(
+        SYNTHETIC_HEADER.replace("0, 4, 10,", "0, 4,"), encoding="utf-8")
+    with pytest.raises(ValueError):
+        make_icons.load_sprite("test", tmp_path)
+
+
+def test_decoder_agrees_with_the_real_header_it_reads():
+    """Whatever art the headers hold today: the declared size, a transparent
+    corner, and an independent decode of frame 0 byte for byte."""
+    import re
+    text = (HEADERS / "sprite_idle.h").read_text(encoding="utf-8")
+    w, h, n = (int(re.search(rf"#define\s+IDLE_{k}\s+(\d+)", text).group(1))
+               for k in ("WIDTH", "HEIGHT", "FRAME_COUNT"))
     sp = make_icons.load_sprite("idle", HEADERS)
-    assert (sp.width, sp.height, sp.frame_count) == (72, 51, 96)
-    frame = sp.frame(0)
-    assert frame.getchannel("A").getbbox() == (6, 11, 66, 51)  # Clawd, nothing else
-    assert frame.getpixel((0, 0))[3] == 0  # the 0x18C5 key is transparent
-    # a body pixel is the RGB565 0xD40C expanded the way the firmware does
-    assert make_icons.rgb565_to_rgb888(0xD40C) == (214, 130, 99)
-    assert frame.getpixel((20, 20)) == (214, 130, 99, 255)
+    assert (sp.width, sp.height, sp.frame_count) == (w, h, n)
+
+    expected = []  # a deliberately plain decode of frame 0
+    i, end = sp.offsets[0], sp.offsets[1]
+    while i < end:
+        value, count = sp.data[i], sp.data[i + 1]
+        rgba = (0, 0, 0, 0) if value == 0x18C5 else make_icons.rgb565_to_rgb888(value) + (255,)
+        expected += [rgba] * count
+        i += 2
+    assert expected[: w * h] == visible(sp.frame(0))
+    box = sp.frame(0).getchannel("A").getbbox()
+    assert box and box != (0, 0, w, h)  # Clawd, with room around him
+    assert pixels(sp.frame(0))[0][3] == 0
 
 
 def test_every_sprite_the_app_shows_decodes_with_a_sound_header():

@@ -19,7 +19,7 @@
     256
   ],
   "transparent_key": "0x18C5",
-  "shrink": "box",
+  "shrink": "mode",
   "sprites": {
     "idle": {
       "source": "sprite_idle.h",
@@ -28,12 +28,12 @@
         0
       ],
       "bbox": [
-        6,
-        11,
-        66,
-        51
+        9,
+        17,
+        99,
+        77
       ],
-      "master": 60
+      "master": 90
     },
     "sleeping": {
       "source": "sprite_sleeping.h",
@@ -42,12 +42,12 @@
         21
       ],
       "bbox": [
-        2,
-        26,
-        70,
-        96
+        3,
+        39,
+        105,
+        144
       ],
-      "master": 70
+      "master": 105
     },
     "thinking": {
       "source": "sprite_thinking.h",
@@ -65,10 +65,10 @@
       "bbox": [
         2,
         0,
-        76,
-        92
+        114,
+        138
       ],
-      "master": 92
+      "master": 138
     },
     "typing": {
       "source": "sprite_typing.h",
@@ -84,12 +84,12 @@
         10
       ],
       "bbox": [
-        5,
-        7,
-        86,
-        78
+        8,
+        10,
+        129,
+        117
       ],
-      "master": 81
+      "master": 121
     },
     "debugger": {
       "source": "sprite_debugger.h",
@@ -105,12 +105,12 @@
         84
       ],
       "bbox": [
-        8,
+        14,
         0,
-        86,
-        43
+        130,
+        65
       ],
-      "master": 78
+      "master": 116
     },
     "building": {
       "source": "sprite_building.h",
@@ -126,12 +126,12 @@
         7
       ],
       "bbox": [
-        13,
+        20,
         0,
-        124,
-        75
+        186,
+        113
       ],
-      "master": 111
+      "master": 166
     },
     "conducting": {
       "source": "sprite_conducting.h",
@@ -147,12 +147,12 @@
         14
       ],
       "bbox": [
-        1,
+        2,
         0,
-        76,
-        78
+        114,
+        118
       ],
-      "master": 78
+      "master": 118
     },
     "wizard": {
       "source": "sprite_wizard.h",
@@ -168,12 +168,12 @@
         42
       ],
       "bbox": [
-        4,
-        2,
-        71,
-        129
+        6,
+        5,
+        106,
+        195
       ],
-      "master": 127
+      "master": 190
     },
     "beacon": {
       "source": "sprite_beacon.h",
@@ -189,12 +189,12 @@
         56
       ],
       "bbox": [
-        6,
-        6,
-        128,
-        127
+        9,
+        9,
+        191,
+        190
       ],
-      "master": 122
+      "master": 182
     },
     "confused": {
       "source": "sprite_confused.h",
@@ -210,12 +210,12 @@
         42
       ],
       "bbox": [
-        14,
-        37,
-        115,
-        109
+        21,
+        55,
+        173,
+        163
       ],
-      "master": 101
+      "master": 152
     },
     "sweeping": {
       "source": "sprite_sweeping.h",
@@ -229,12 +229,12 @@
         10
       ],
       "bbox": [
-        51,
+        78,
         0,
-        138,
-        56
+        210,
+        84
       ],
-      "master": 87
+      "master": 132
     },
     "happy": {
       "source": "sprite_happy.h",
@@ -249,11 +249,11 @@
       ],
       "bbox": [
         0,
-        2,
-        116,
-        88
+        6,
+        174,
+        153
       ],
-      "master": 116
+      "master": 174
     },
     "alert": {
       "source": "sprite_alert.h",
@@ -269,12 +269,12 @@
         35
       ],
       "bbox": [
-        25,
+        37,
         0,
-        120,
-        98
+        178,
+        148
       ],
-      "master": 98
+      "master": 148
     },
     "dizzy": {
       "source": "sprite_dizzy.h",
@@ -290,12 +290,12 @@
         28
       ],
       "bbox": [
-        1,
-        2,
-        92,
-        72
+        0,
+        3,
+        136,
+        108
       ],
-      "master": 91
+      "master": 136
     },
     "grey": {
       "derived_from": "idle",
