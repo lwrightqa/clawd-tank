@@ -51,6 +51,8 @@
 #define LANE_MIN_PX        140    /* narrowest lane a session gets while the notification panel is open
                                    * (wide layout): three lanes in the 420 px scene of the 640 x 172 bar; the
                                    * 1.5x sprites of the main working states are up to 130 px wide */
+#define SPREAD_EXTRA_PX     20    /* wide layout: sprites stand this much further apart than equal lanes put them... */
+#define SPREAD_EDGE_PX      64    /* ...but no sprite centre nearer than this to the scene's edge (half a 130 px sprite) */
 
 /* Frame timing in ms per animation */
 #define IDLE_FRAME_MS      (1000 / 6)   /* 167ms @ 6fps */
@@ -701,9 +703,11 @@ static int scene_visible_count(const scene_t *s, int width_px, int count)
 
 /* Offset from the container's BOTTOM_MID for session idx of count when the scene is width_px wide.
  * The 320 layout uses the x_centers table at full width and centres its one visible sprite when narrow;
- * the wide layout splits the scene into equal lanes, one per visible session, sprite centred in its lane
- * (at 640: one session at 320; two at 160/480; three at 106/320/533; four at 80/240/400/560). A hidden
- * session (idx past the visible lanes) lands past the right edge. */
+ * the wide layout has one lane per visible session and stands the sprites SPREAD_EXTRA_PX further apart than
+ * equal lanes would, as far as the scene's edges allow (no sprite centre nearer than SPREAD_EDGE_PX to either
+ * end; never closer than equal lanes). At 640: one session at 320; two at 150/490; three at 87/320/553; four at
+ * 65/235/405/575 (equal lanes gave 160/480, 107/320/533 and 80/240/400/560); beside a 180 px panel, three at
+ * 64/230/396 in 460 px. A hidden session (idx past the visible lanes) lands past the right edge. */
 static int scene_slot_x_off(const scene_t *s, int width_px, int count, int idx)
 {
     if (count < 1) count = 1;
@@ -714,7 +718,12 @@ static int scene_slot_x_off(const scene_t *s, int width_px, int count, int idx)
     }
     int lanes = scene_visible_count(s, width_px, count);
     int lane_w = width_px / lanes;
-    return lane_w * idx + lane_w / 2 - width_px / 2;
+    if (lanes < 2) return lane_w * idx + lane_w / 2 - width_px / 2;
+    int spacing = lane_w + SPREAD_EXTRA_PX;
+    int max_spacing = (width_px - 2 * SPREAD_EDGE_PX) / (lanes - 1);
+    if (spacing > max_spacing) spacing = max_spacing;
+    if (spacing < lane_w) spacing = lane_w;
+    return (2 * idx - (lanes - 1)) * spacing / 2;
 }
 
 /* Put a slot on the walking animation and slide it from one x offset to another; on arrival
