@@ -32,7 +32,13 @@ hiddenimports = (
     + ["clawd_tank_menubar", "clawd_tank_menubar.hooks", "pystray._win32"]
 )
 binaries = collect_dynamic_libs("winrt")
-datas = [(str(ASSETS), "clawd_tank_tray/assets")]
+# Only what the app reads at run time: the three tray pictures (idle, grey, error,
+# at each size) and the .ico of the window. icons.json (where they came from) and
+# anything else under assets/ stays in the source tree.
+datas = [
+    (str(ASSETS / "icons"), "clawd_tank_tray/assets/icons"),
+    (str(ASSETS / "clawd.ico"), "clawd_tank_tray/assets"),
+]
 
 version_info = VSVersionInfo(
     ffi=FixedFileInfo(filevers=nums, prodvers=nums, mask=0x3F, flags=0x0, OS=0x40004,
