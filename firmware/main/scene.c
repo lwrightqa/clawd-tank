@@ -983,7 +983,13 @@ void scene_set_time_visible(scene_t *scene, bool visible)
 void scene_update_time(scene_t *scene, int hour, int minute)
 {
     if (!scene) return;
-    lv_label_set_text_fmt(scene->time_label, "%02d:%02d", hour, minute);
+#ifdef SIMULATOR
+    lv_label_set_text_fmt(scene->time_label, "%02d:%02d", hour, minute);   /* upstream's 24-hour clock */
+#else
+    /* The bar shows a 12-hour clock, "2:32 PM"; hud_place_badge() below re-measures the wider label. */
+    int hour12 = hour % 12;
+    lv_label_set_text_fmt(scene->time_label, "%d:%02d %s", hour12 == 0 ? 12 : hour12, minute, hour < 12 ? "AM" : "PM");
+#endif
     if (scene->wide) hud_place_badge(scene);
 }
 
