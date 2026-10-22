@@ -11,8 +11,9 @@ Clawd Tank is a notification display for Claude Code running on the [Waveshare E
 **No hardware? No problem.** The simulator runs natively on macOS and ships bundled inside the Menu Bar app. Download it from [Releases](https://github.com/marciogranzotto/clawd-tank/releases) — no build tools needed.
 
 <p align="center">
-  <img src="assets/sim-recordings/clawd-multi-session.gif" alt="Multi-session display" width="480">
-  <img src="assets/sim-recordings/clawd-notification.gif" alt="Clawd notification" width="480">
+  <img src="docs/bar/mock-wide.png" alt="The bar's quiet screen: four sessions, each with its own Clawd, and the clock" width="640"><br>
+  <img src="docs/bar/mock-notification-wide.png" alt="A notification arriving: three Clawds beside the 180 px notification panel" width="640"><br>
+  <sub>The Waveshare bar's screen (640 x 172): quiet with four sessions, and a notification arriving. Reference renders drawn from the firmware's own sprites and layout rules, not photos. The simulator's original 320 x 172 recordings are in <code>assets/sim-recordings/</code>.</sub>
 </p>
 
 ## How It Works
@@ -62,7 +63,7 @@ What changed (all under `firmware/`):
 
 ### The wide layout (640 x 172)
 
-Reference renders are in `docs/bar/`: `mock-wide.png` (quiet state, four sessions), `mock-notification-wide.png` (a notification's hero moment, three sessions, the 220 px panel) and `mock-disconnected.png` (the No connection screen), all drawn from the 1.5x sprites described below. `mock-centred.png`, `mock-notification-centred.png` and `mock-notification-centred-collapsed.png` are the first pass's 320 layout with the original-size salmon sprites. The mock's fonts are not Montserrat, so text widths there are approximate.
+Reference renders are in `docs/bar/`: `mock-wide.png` (quiet state, four sessions), `mock-notification-wide.png` (a notification's hero moment, three sessions, the 180 px panel) and `mock-disconnected.png` (the No connection screen with its 135 px Clawd), all drawn from the 1.5x sprites described below, with the sessions spread as `scene.c` places them and LVGL's Montserrat for the text. `mock-centred.png`, `mock-notification-centred.png` and `mock-notification-centred-collapsed.png` are the first pass's 320 layout with the original-size salmon sprites. They are renders, not photos: the real panel's colours and text edges differ slightly.
 
 Quiet (no notifications): the scene is the full 640 px. The sky gradient and the grass span the width, the seven-tuft pattern repeats every 160 px, and there are sixteen stars instead of six (the original six, the same six again 330 px to the right, four more in the gaps; same sizes and twinkle). Sessions get equal lanes, each sprite centred in its lane: one session at x 320; two at 160 and 480; three at 106, 320 and 533; four at 80, 240, 400 and 560 (on 320 the original table, 160 / 107 + 213 / 80 + 160 + 240 / 64 + 128 + 192 + 256, stays). The clock is top-right, 6 px in from the edge at y 4; the sub-agent counter stays top-left at (4, 2); the "+N" overflow badge keeps its rule (five or more sessions) and sits 6 px to the left of the clock.
 
