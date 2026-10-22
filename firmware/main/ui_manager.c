@@ -209,6 +209,11 @@ void ui_manager_handle_event(const ble_evt_t *evt)
         ESP_LOGI(TAG, "Disconnected");
         s_connected = false;
         notif_store_clear(&s_store);
+        /* A daemon that leaves while Clawd sleeps must not leave the screen dark: "No connection" has to show. */
+        if (s_display_status == DISPLAY_STATUS_SLEEPING) {
+            display_set_brightness(config_store_get_brightness());
+            s_display_status = DISPLAY_STATUS_IDLE;
+        }
         transition_to(UI_STATE_DISCONNECTED);
         break;
 
@@ -292,7 +297,10 @@ void ui_manager_handle_event(const ble_evt_t *evt)
 
         /* Handle backlight for sleep/wake */
         if (new_status == DISPLAY_STATUS_SLEEPING && old_status != DISPLAY_STATUS_SLEEPING) {
-            display_set_brightness(0);
+            /* The bar sits on a desk, so a sleeping Clawd stays visible, dimmed; CLAWD_SLEEP_BRIGHTNESS 0 is the
+             * upstream behaviour (screen off). Never brighter than the configured level. */
+            uint8_t cfg = config_store_get_brightness();
+            display_set_brightness(CONFIG_CLAWD_SLEEP_BRIGHTNESS < cfg ? CONFIG_CLAWD_SLEEP_BRIGHTNESS : cfg);
         } else if (new_status != DISPLAY_STATUS_SLEEPING && old_status == DISPLAY_STATUS_SLEEPING) {
             display_set_brightness(config_store_get_brightness());
         }
