@@ -56,9 +56,11 @@ def test_plan_remove_keeps_the_users_part_of_a_shared_group_and_its_matcher():
 
 
 def test_plan_remove_ignores_commands_that_merely_mention_our_script():
+    lookalikes = [f"cat {hooks.HOOK_COMMAND}",
+                  hooks.HOOK_COMMAND + "-old",                         # another script, same prefix
+                  hooks.HOOK_COMMAND.replace("py -3", "py -2")]        # on Windows: another interpreter
     lookalike = {"hooks": {"Stop": [{"hooks": [
-        {"type": "command", "command": f"cat {hooks.HOOK_COMMAND}"},
-        {"type": "command", "command": hooks.HOOK_COMMAND.replace("py -3", "py -2")}]}]}}
+        {"type": "command", "command": c} for c in lookalikes if c != hooks.HOOK_COMMAND]}]}}
     assert install_hooks.plan_remove(lookalike, hooks) == (lookalike, [])
 
 

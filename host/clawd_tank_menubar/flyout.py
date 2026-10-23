@@ -59,6 +59,7 @@ CHECK = "\u2713"          # the check mark, as text
 # and then reaches the button as a click of its own. A close this recent means that
 # click: do not open it again.
 CLICK_GUARD_S = 0.4
+MENU_BAR_SLACK = 40.0   # how far below the screen's top edge a status item window may sit
 
 _EMPTY = FlyoutContent(TITLE, DOT_IDLE, (), "", ())
 
@@ -361,6 +362,23 @@ def row_views(view) -> list:
 
 
 # --- the popover -------------------------------------------------------------------------------
+
+def anchor_is_placed(button) -> bool:
+    """True once the status item's window sits on the menu bar. For a moment after
+    launch AppKit still reports a frame just below the screen (y = -24), and a
+    popover opened then lands at the bottom left of the screen, not under the icon.
+    A click comes long after that; the test aid (CLAWD_TANK_OPEN_FLYOUT) waits."""
+    try:
+        window = button.window()
+        screen = window.screen() if window is not None else None
+        if screen is None:
+            return False
+        frame, area = window.frame(), screen.frame()
+        top_gap = (area.origin.y + area.size.height) - (frame.origin.y + frame.size.height)
+        return frame.size.width > 0 and top_gap <= MENU_BAR_SLACK
+    except Exception:
+        return False
+
 
 def _log_anchor(button) -> None:
     """Log where AppKit says the status item is, for a flyout that opens in the wrong place."""

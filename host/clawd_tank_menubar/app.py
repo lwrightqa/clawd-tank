@@ -589,6 +589,7 @@ class ClawdTankApp(rumps.App, DaemonObserver):
             logger.debug("could not set the activation policy", exc_info=True)
 
     def _on_left(self, button):
+        logger.info("Left click on the status item")
         flyout = self._ensure_flyout()
         if not flyout.is_shown:
             # What it shows is current when it opens: the hooks file or the login
@@ -604,12 +605,18 @@ class ClawdTankApp(rumps.App, DaemonObserver):
         self._login_item.state = launchd.is_enabled()
         self._clicks.show_menu()
 
-    def _open_flyout_for_test(self):
-        """CLAWD_TANK_OPEN_FLYOUT=1: open the flyout without a click."""
+    def _open_flyout_for_test(self, attempt: int = 0):
+        """CLAWD_TANK_OPEN_FLYOUT=1: open the flyout without a click, once the status
+        item is on the menu bar (a popover opened before that lands in a screen corner)."""
+        from .flyout import anchor_is_placed
         button = self._clicks.button()
         if button is None:
             logger.warning("Cannot open the flyout: the status item is not ready")
             return
+        if not anchor_is_placed(button) and attempt < STATUS_ITEM_POLL_MAX:
+            self._after(STATUS_ITEM_POLL_S, lambda: self._open_flyout_for_test(attempt + 1))
+            return
+        logger.info("Opening the flyout for the test aid (after %d waits)", attempt)
         self._refresh_hooks_status()
         self._refresh_flyout()
         self._ensure_flyout().show(button)

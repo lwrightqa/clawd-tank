@@ -179,7 +179,10 @@ async def test_a_signal_triggers_the_shutdown(state_dir):
 def test_windows_listens_for_ctrl_break():
     sigs = daemon_mod._shutdown_signals()
     assert signal.SIGTERM in sigs and signal.SIGINT in sigs
-    assert (signal.SIGBREAK in sigs) == hasattr(signal, "SIGBREAK")
+    if hasattr(signal, "SIGBREAK"):          # Windows only: Ctrl+Break, and console close
+        assert signal.SIGBREAK in sigs
+    else:
+        assert len(sigs) == 2
 
 
 # --- the real entry point, as a user starts it --------------------------------------------------

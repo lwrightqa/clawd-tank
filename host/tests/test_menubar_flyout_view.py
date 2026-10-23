@@ -294,6 +294,36 @@ def test_light_and_dark_renders_differ(mac, tmp_path):
     assert backdrop_brightness(light) > backdrop_brightness(dark) + 1.0
 
 
+def _fake_button(frame, screen=(0.0, 0.0, 1920.0, 1080.0)):
+    """A status button whose window has this frame (x, y, w, h) on a screen (x, y, w, h)."""
+    def rect(x, y, w, h):
+        return types.SimpleNamespace(origin=types.SimpleNamespace(x=x, y=y),
+                                     size=types.SimpleNamespace(width=w, height=h))
+    scr = None if screen is None else types.SimpleNamespace(frame=lambda: rect(*screen))
+    window = types.SimpleNamespace(frame=lambda: rect(*frame), screen=lambda: scr)
+    return types.SimpleNamespace(window=lambda: window)
+
+
+def test_the_anchor_is_placed_when_the_status_window_is_on_the_menu_bar(mac):
+    from clawd_tank_menubar.flyout import anchor_is_placed
+    assert anchor_is_placed(_fake_button((1650.0, 1056.0, 34.0, 24.0)))          # top of the main screen
+    assert anchor_is_placed(_fake_button((300.0, -24.0, 34.0, 24.0),             # a screen below the main one
+                                         screen=(0.0, -1080.0, 1920.0, 1080.0)))
+
+
+def test_the_anchor_is_not_placed_just_after_launch(mac):
+    """The frame AppKit reports for a moment after launch: below the screen's bottom edge."""
+    from clawd_tank_menubar.flyout import anchor_is_placed
+    assert not anchor_is_placed(_fake_button((0.0, -24.0, 34.0, 24.0)))
+
+
+def test_the_anchor_is_not_placed_without_a_window_or_a_screen(mac):
+    from clawd_tank_menubar.flyout import anchor_is_placed
+    assert not anchor_is_placed(_fake_button((1650.0, 1056.0, 34.0, 24.0), screen=None))
+    assert not anchor_is_placed(types.SimpleNamespace(window=lambda: None))
+    assert not anchor_is_placed(object())
+
+
 def test_the_snapshot_command_writes_six_pictures(mac, tmp_path, capsys):
     assert snapshot.main([str(tmp_path / "out")]) == 0
     printed = capsys.readouterr().out.split()
