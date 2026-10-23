@@ -244,6 +244,7 @@ class DaemonEngine:
                 hook_tcp_port=self.tcp_port,
                 sessions_path=self.sessions_path,
                 embedded=True,
+                keep_live_sessions=True,     # an open but idle session stays on the bar
             )
         except ValueError as e:              # a bad CLAWD_TANK_TCP_PORT / _TRANSPORT
             self._set_status(EngineStatus.ERROR, f"Bad setting: {e}")

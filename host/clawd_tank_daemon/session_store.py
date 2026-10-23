@@ -49,11 +49,16 @@ def save_sessions(
             pass
 
 
-def load_sessions(path: Path = SESSIONS_PATH) -> tuple[dict[str, dict], list[tuple[str, int]], int]:
+def load_sessions(
+    path: Path = SESSIONS_PATH, *, keep_pid: bool = False,
+) -> tuple[dict[str, dict], list[tuple[str, int]], int]:
     """Load session states from JSON. Returns (states, order, next_display_id).
 
     Returns empty defaults on any error. Entries missing required keys are dropped.
     Handles both old format (flat dict of sessions) and new envelope format.
+
+    A stored PID is dropped unless ``keep_pid``: the caller that keeps it must check
+    that the process is still the same one (procutil.session_process_alive).
     """
     try:
         data = json.loads(path.read_text())
@@ -81,7 +86,9 @@ def load_sessions(path: Path = SESSIONS_PATH) -> tuple[dict[str, dict], list[tup
                 continue
             # Drop unsafe-across-restart fields. PID may have been recycled;
             # monotonic time is meaningless after process restart.
-            state.pop("pid", None)
+            pid = state.pop("pid", None)
+            if keep_pid and isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+                state["pid"] = pid
             state.pop("last_event_monotonic", None)
             if "subagents" in state:
                 if not isinstance(state["subagents"], list):

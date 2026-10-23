@@ -12,7 +12,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 from .ble_client import ClawdBleClient
 from .hook_transport import ENV_TCP_PORT, ENV_TRANSPORT, TCP_DEFAULT_PORT, TRANSPORTS
-from .procutil import IS_WINDOWS, pid_alive
+from .procutil import IS_WINDOWS, pid_alive, session_process_alive
 from .protocol import (
     ASK_USER_QUESTION_TOOL,
     daemon_message_to_ble_payload,
@@ -178,6 +178,7 @@ class ClawdDaemon:
         hook_transport: Optional[str] = None,
         hook_tcp_port: Optional[int] = None,
         embedded: bool = False,
+        keep_live_sessions: bool = False,
     ):
         """``hook_transport`` ("unix", "tcp" or None for auto) and
         ``hook_tcp_port`` choose where clawd-tank-notify reaches this daemon;
@@ -186,7 +187,16 @@ class ClawdDaemon:
         ``embedded`` is for a daemon that runs in a thread of another program
         (the Windows tray app): run() installs no signal handlers (only the main
         thread may), and a lock held by another daemon raises DaemonAlreadyRunning
-        instead of calling sys.exit(). Everything else is as upstream."""
+        instead of calling sys.exit().
+
+        ``keep_live_sessions`` keeps a session for as long as its Claude Code
+        process is running, however long it has been quiet. A session that is open
+        but idle sends no hook events, so the 10 minute staleness timeout would drop
+        it, and a bar that connects (or a tray app that starts) after that would show
+        nothing until the next hook. The PID is also kept across a restart, checked
+        against the process's creation time so a recycled PID does not keep a ghost.
+        The PID-liveness check still drops a session whose process has gone.
+        Everything else is as upstream."""
         self._transports: dict[str, TransportClient] = {}
         self._transport_queues: dict[str, asyncio.Queue] = {}
 
@@ -225,17 +235,25 @@ class ClawdDaemon:
         self._headless = headless
         self._embedded = embedded
         self._sessions_path = sessions_path if sessions_path is not None else session_store.SESSIONS_PATH
-        loaded_states, loaded_order, loaded_next_id = load_sessions(self._sessions_path)
+        self._keep_live_sessions = keep_live_sessions
+        loaded_states, loaded_order, loaded_next_id = load_sessions(
+            self._sessions_path, keep_pid=keep_live_sessions)
 
         # One-shot startup prune by wall-clock: if last_event is older than the
         # staleness timeout, the session almost certainly belongs to a dead Claude
         # Code process from before the daemon restarted. After this prune we switch
         # to monotonic time for runtime tracking (survives macOS sleep/wake).
+        # With keep_live_sessions a session that has a PID is judged by its process
+        # instead of by its age: kept while that same process runs, dropped if not.
         now_wall = time.time()
-        stale_ids = [
-            sid for sid, s in loaded_states.items()
-            if now_wall - s.get("last_event", now_wall) > 600.0  # default timeout
-        ]
+        stale_ids = []
+        for sid, s in loaded_states.items():
+            last_event = s.get("last_event", now_wall)
+            if keep_live_sessions and s.get("pid") is not None:
+                if not session_process_alive(s["pid"], last_event):
+                    stale_ids.append(sid)
+            elif now_wall - last_event > 600.0:  # default timeout
+                stale_ids.append(sid)
         for sid in stale_ids:
             del loaded_states[sid]
         loaded_order = [(sid, did) for sid, did in loaded_order if sid not in stale_ids]
@@ -560,6 +578,9 @@ class ClawdDaemon:
             # A dead Claude process is still caught by the PID-liveness checker.
             if s.get("state") != "waiting"
             and now_mono - s.get("last_event_monotonic", now_mono) > self._session_staleness_timeout
+            # An open but idle session emits nothing; its process still running is
+            # the proof it is not stale. The liveness checker drops it if that dies.
+            and not (self._keep_live_sessions and pid_alive(s.get("pid")))
         ]
         for sid in stale:
             logger.info("Evicting stale session: %s", sid[:12])
