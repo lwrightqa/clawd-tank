@@ -4,7 +4,7 @@
 
 <h1 align="center">Clawd Tank on the Waveshare bar</h1>
 
-Clawd Tank shows what your Claude Code sessions are doing on a small desk display: one animated pixel-art crab, Clawd, per session, a card for every notification, and a clock. This repository runs it on the [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/esp32-s3-touch-lcd-3.49.htm) (V2), a 3.49-inch 640 x 172 bar that the firmware drives over Bluetooth LE only. The Python host has been run on Windows; its macOS and Linux paths are the original project's. This is a fork of [marciogranzotto/clawd-tank](https://github.com/marciogranzotto/clawd-tank) (MIT), which targets a 320 x 172 ESP32-C6 board and macOS.
+Clawd Tank shows what your Claude Code sessions are doing on a small desk display: one animated pixel-art crab, Clawd, per session, a card for every notification, and a clock. This repository runs it on the [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/esp32-s3-touch-lcd-3.49.htm) (V2), a 3.49-inch 640 x 172 bar that the firmware drives over Bluetooth LE only. The Python host has been run on Windows, where a tray app can run it for you; its macOS and Linux paths are the original project's. This is a fork of [marciogranzotto/clawd-tank](https://github.com/marciogranzotto/clawd-tank) (MIT), which targets a 320 x 172 ESP32-C6 board and macOS.
 
 <p align="center">
   <img src="docs/bar/mock-wide.png" alt="The bar's quiet screen: four sessions, each with its own Clawd, and the clock" width="640"><br>
@@ -19,6 +19,7 @@ Clawd Tank shows what your Claude Code sessions are doing on a small desk displa
 - **Art.** Clawd is drawn at 1.5 times the original size in orange (`#EF7D4A` on the panel instead of salmon `#D68263`), rebuilt from the SVGs by `tools/build_bar_sprites.py`. The No connection screen has its own 135 px Clawd.
 - **Bar behaviour.** A 12-hour clock, the PWR key switching the screen off and on, and a dimmed instead of dark screen while Clawd sleeps. There is no RGB LED flash: the board has no LED.
 - **Windows host.** The hooks reach the daemon over TCP on `127.0.0.1` where Windows has no Unix sockets, and a hook installer asks you to type `yes` before it edits Claude Code's settings. See [host/WINDOWS.md](host/WINDOWS.md).
+- **Windows tray app.** `ClawdTank.exe` runs the daemon for you, shows Clawd in the notification area, installs the hooks after you click Yes, and can start with Windows. See [Windows: the tray app](#windows-the-tray-app) and [host/TRAY.md](host/TRAY.md).
 
 ## Hardware
 
@@ -126,11 +127,23 @@ python -m clawd_tank_daemon.install_hooks            # asks you to type yes firs
 
 The installer prints the `hooks` block and the settings file it would edit (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json`), and writes only after you type `yes` in a terminal; there is no flag that skips the question. It then writes the notify script to `~/.clawd-tank/` (`clawd-tank-notify.py` on Windows, `clawd-tank-notify` elsewhere), saves a timestamped backup of your settings, and merges the 13 hooks in, keeping your other settings and hooks. Running it again changes nothing, and a `settings.json` that is not valid JSON is refused. On Windows each hook is `py -3` followed by the quoted path of `clawd-tank-notify.py` in `%USERPROFILE%\.clawd-tank\`, written with forward slashes so it works from Git Bash, PowerShell and cmd. Restart running Claude Code sessions afterwards, because hooks are read at startup.
 
-The installed notify script never starts the daemon, so start it yourself (step 2). The repository's own `host/clawd-tank-notify` does start it on the first hook, with whichever Python runs it, which then needs bleak.
+The installed notify script never starts the daemon, so start it yourself (step 2, or use the [tray app](#windows-the-tray-app), which runs it). The repository's own `host/clawd-tank-notify` does start it on the first hook, with whichever Python runs it, which then needs bleak.
 
 The installer's code is platform neutral and is documented for macOS and Linux too, but it has only been run on Windows here. On macOS the upstream menu bar app installs the same hooks (see [From upstream](#from-upstream)). Do not use `host/install-hooks.sh` from upstream: it registers three hooks, not thirteen.
 
 To check the result, start a new Claude Code session and send a prompt. Clawd should switch to thinking and then to a tool animation, and the daemon log shows a `Socket msg:` line for every hook and a `Display:` line whenever the scene changes.
+
+### Windows: the tray app
+
+On Windows, `ClawdTank.exe` can replace steps 2 and 3. It runs the daemon in the background, installs the hooks when you click Yes in a dialog (the same consent as typing `yes`, with the same backup of `settings.json`), and can start with Windows. Its icon is one still Clawd in the notification area: orange when the bar is connected, grey while it looks for the bar, and with a red dot when another daemon holds port 47421. A click on the icon opens a small flyout with the state of the bar, the hooks and your sessions, and rows to install or remove the hooks, open the log, start with Windows or quit; a right-click opens a menu with the same actions. Unlike the terminal daemon, it keeps a session on the bar for as long as its Claude Code process runs, however long the session has been idle.
+
+This repository publishes no build, so build one (Python 3.10 or newer with the `py` launcher):
+
+```powershell
+powershell -File host\tray\build-tray.ps1
+```
+
+The result is `host\tray\dist\ClawdTank\ClawdTank.exe`; keep its folder together. The exe is not code-signed, so SmartScreen asks you to click More info, then Run anyway. Close any terminal daemon first, because only one daemon can hold the bar. How the flyout opens and closes, the files and settings it uses, how to uninstall it and its known limits are in [host/TRAY.md](host/TRAY.md).
 
 ## Screens and behaviour
 
@@ -228,7 +241,7 @@ For each of eighteen animations the script renders PNG frames with `tools/svg2fr
 These parts come from the original project. They are still in the repository, and none has been exercised on this board.
 
 - **Simulator** (`simulator/`): a native SDL2 build of the UI code that the daemon can drive over TCP (`--listen`, port 19872, with the daemon's `--sim` or `--sim-only`) or that scenario files can script. It is fixed at 320 x 172, so it shows the original layout with this fork's larger sprites, which have not been retuned for it; its clock is 24-hour. It needs LVGL in `firmware/managed_components/`, which configuring the firmware once creates. Not built here. See [simulator/README.md](simulator/README.md). `tools/record_gif.py` records GIFs from its binary; the GIFs in `assets/sim-recordings/` are the original project's recordings, with the original sprites.
-- **macOS menu bar app** (`host/clawd_tank_menubar/`): run it from source with `python -m clawd_tank_menubar` in `host/`, or build the `.app` with `host/build.sh` (it expects a `host/.venv` with py2app and builds the static simulator first). It runs the daemon with BLE and simulator transports and offers a brightness slider, a session-timeout picker, an install-hooks item and launch at login; it logs to `~/Library/Logs/ClawdTank/`. Not run here. Windows has no equivalent: only its hook-installer logic (`hooks.py`) is shared with `install_hooks`.
+- **macOS menu bar app** (`host/clawd_tank_menubar/`): run it from source with `python -m clawd_tank_menubar` in `host/`, or build the `.app` with `host/build.sh` (it expects a `host/.venv` with py2app and builds the static simulator first). It runs the daemon with BLE and simulator transports and offers a brightness slider, a session-timeout picker, an install-hooks item and launch at login; it logs to `~/Library/Logs/ClawdTank/`. Not run here. On Windows the [tray app](#windows-the-tray-app) plays that part; it and the menu bar app both use the hook-installer logic in `hooks.py`.
 - **BLE debugging** (`tools/ble_interactive.py`, whose keys are listed in its help text, and `tools/ble_test.py`, a scripted add-and-dismiss run): both use the UUIDs above and need the daemon stopped, because the bar takes one connection. Not run here. `ble_interactive.py` imports `termios`, so it does not run on Windows.
 
 ## Project layout
@@ -242,6 +255,8 @@ These parts come from the original project. They are still in the repository, an
 | `host/clawd_tank_daemon/` | the daemon: BLE client, hook transport, socket server, session state, protocol, `install_hooks.py` |
 | `host/clawd-tank-notify` | the repository's hook script, which can start the daemon |
 | `host/WINDOWS.md` | the Windows guide |
+| `host/clawd_tank_tray/`, `host/tray/` | the Windows tray app, and its build (PyInstaller spec, `build-tray.ps1`, `make_icons.py`) |
+| `host/TRAY.md` | the tray app guide |
 | `host/tests/` | the host tests |
 | `host/clawd_tank_menubar/`, `host/build.sh`, `host/setup.py`, `host/launcher.py` | the macOS menu bar app and its build (upstream) |
 | `host/install-hooks.sh` | upstream's `jq` installer, which is out of date |
@@ -256,14 +271,14 @@ These parts come from the original project. They are still in the repository, an
 ## Tests
 
 ```bash
-# Python: daemon, hook transport, installer, protocol
-cd host && pip install -r requirements-dev.txt && python -m pytest
+# Python: daemon, hook transport, installer, protocol, tray app
+cd host && pip install -r requirements-dev.txt pystray pillow && python -m pytest
 
 # C: notification store, config store, RLE decoder (gcc and make)
 cd firmware/test && make test
 ```
 
-The host suite has 489 tests. On Windows 11 with Python 3.10.11 and bleak 3.0.2, 463 pass and 26 are skipped with a reason (24 need Unix sockets, one needs macOS's `NSBundle`, one checks a non-Windows answer; TCP and Windows tests cover the same ground). It has not been run on macOS or Linux, and no test talks to a real radio: BLE is faked. The C tests are 11 for the notification store, 7 for the config store and 5 for the RLE decoder. `make test` builds them with AddressSanitizer and UndefinedBehaviorSanitizer; on Windows the three programs were built with MinGW-w64 gcc 16.1 without the sanitizers and pass, with `-Wno-unused-variable` added for `test_config_store`, where `-Werror` rejects an unused `TAG` in `config_store.c`. The layout code (`scene.c`, `notification_ui.c`, `ui_manager.c`), the display driver and the BLE service have no automated tests; they are checked by running on the bar.
+The host suite has 913 tests. On Windows 11 with Python 3.10.11, bleak 3.0.2, pystray 0.19.5 and Pillow 12.3.0, 882 pass and 31 are skipped with a reason (24 need Unix sockets, one needs macOS's `NSBundle`, one checks a non-Windows answer, four need `ClawdTank.exe` to be built, one needs a working Tk; TCP and Windows tests cover the same ground). The tray tests (`tests/test_tray_*.py` and `tests/test_daemon_embedded.py`) import pystray and Pillow, so without them five test files fail to import. The suite has not been run on macOS or Linux, and no test talks to a real radio: BLE is faked. The C tests are 11 for the notification store, 7 for the config store and 5 for the RLE decoder. `make test` builds them with AddressSanitizer and UndefinedBehaviorSanitizer; on Windows the three programs were built with MinGW-w64 gcc 16.1 without the sanitizers and pass, with `-Wno-unused-variable` added for `test_config_store`, where `-Werror` rejects an unused `TAG` in `config_store.c`. The layout code (`scene.c`, `notification_ui.c`, `ui_manager.c`), the display driver and the BLE service have no automated tests; they are checked by running on the bar.
 
 ## Credits and licence
 
@@ -271,6 +286,7 @@ The host suite has 489 tests. On Windows 11 with Python 3.10.11 and bleak 3.0.2,
 - **Board bring-up**: adapted from the author's own firmware for the same board (the source comments call it the MiniBar project), which follows Waveshare's ESP-IDF examples for the V2 board (`10_LVGL_V9_Test`, `11_FactoryProgram`, `07_BATT_PWR_Test`) and its schematic. That covers the expander driver and power hold, the panel reset and init sequence, the QSPI settings, the chunked flush, the backlight PWM and brightness curve, the pin map, the PSRAM allocation of LVGL's memory and the chip settings in `sdkconfig.defaults`.
 - **Panel driver**: Espressif's `esp_lcd_axs15231b` (Apache-2.0), fetched by the component manager, not vendored.
 - **LVGL** 9.5 (MIT), fetched by the component manager.
+- **Tray app**: Clawd's icons are made from the original project's sprite (its MIT notice is kept in [host/tray/LICENSE-clawd-tank.txt](host/tray/LICENSE-clawd-tank.txt)); it uses [pystray](https://github.com/moses-palmer/pystray) and [Pillow](https://python-pillow.org), and is packaged with PyInstaller. The header image at the top of this file is the same Clawd.
 - **Bundled in `simulator/`**: cJSON (Dave Gamble and contributors, MIT) and stb_image_write (public domain or MIT).
 
 This repository is under the MIT licence, in [LICENSE](LICENSE), which carries the original notice: `Copyright (c) 2026 Marcio Granzotto Rodrigues`.
