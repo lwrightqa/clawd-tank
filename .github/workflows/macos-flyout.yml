@@ -1,0 +1,212 @@
+name: macOS flyout
+
+# Builds and checks the macOS menu bar app (host/clawd_tank_menubar) on GitHub's
+# Mac runner, since it cannot be run on the machine it is written on: the host
+# tests, snapshots of the flyout, the py2app build, a selftest and a launch of
+# the built app, and the DMG. Not a release workflow: it publishes nothing.
+# See host/MAC.md.
+
+on:
+  push:
+    branches: [mac-flyout]
+    paths:
+      - "host/**"
+      - ".github/workflows/macos-flyout.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      # The version the app shows in its menu. Set before any file is changed, so
+      # setup.py does not bake "-dirty" (it ignores git when this is set).
+      - name: Set the version to bake in
+        run: echo "CLAWD_TANK_VERSION=${GITHUB_REF_NAME}@$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r host/requirements.txt py2app pytest pytest-asyncio pillow
+
+      # The whole host suite, on macOS for the first time. Failures are not hidden:
+      # the step goes red and the job ends red, but the later steps still run (with
+      # !cancelled(), not always(), so that cancelling the run still cancels it) and
+      # still upload their artifacts.
+      #
+      # Six tray test modules test the Windows tray app and cannot even be imported
+      # on a Mac (winreg, ctypes.WinDLL, tkinter on Win32 handles); host/tests/
+      # conftest.py leaves them out of collection when the platform is not Windows.
+      - name: Host tests
+        working-directory: host
+        timeout-minutes: 15
+        run: python -m pytest tests -q -p no:cacheprovider --junitxml=../test-results.xml
+
+      - name: Render flyout snapshots
+        if: ${{ !cancelled() }}
+        working-directory: host
+        run: python -m clawd_tank_menubar.snapshot ../snapshots
+
+      - name: Upload flyout snapshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: flyout-snapshots
+          path: snapshots
+          if-no-files-found: warn
+
+      # host/AppIcon.icns in git is upstream's crab. Clawd replaces it in this
+      # workspace only; nothing is committed or pushed.
+      - name: Build the app icon
+        if: ${{ !cancelled() }}
+        run: python host/tray/make_mac_appicon.py
+
+      # No simulator: no cmake, no LVGL, no SDL2. The menu's Simulator item has
+      # nothing to start in this build.
+      - name: Build the app with py2app
+        id: build
+        if: ${{ !cancelled() }}
+        working-directory: host
+        run: |
+          python setup.py py2app
+          APP="$PWD/dist/Clawd Tank.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::$APP was not built"
+            ls -la dist || true
+            exit 1
+          fi
+          EXE_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Contents/Info.plist")
+          EXE="$APP/Contents/MacOS/$EXE_NAME"
+          if [ ! -x "$EXE" ]; then
+            echo "::error::the app's executable $EXE is missing"
+            ls -la "$APP/Contents/MacOS" || true
+            exit 1
+          fi
+          echo "APP_EXE=$EXE" >> "$GITHUB_ENV"
+
+      # For the log only: what the bundle holds and whether it is signed.
+      - name: Inspect the bundle
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: host
+        run: |
+          APP="dist/Clawd Tank.app"
+          du -sh "$APP"
+          /usr/libexec/PlistBuddy -c "Print" "$APP/Contents/Info.plist"
+          echo "--- architectures"
+          lipo -archs "$APP_EXE" || file "$APP_EXE"
+          echo "--- signature"
+          codesign -dv --verbose=2 "$APP" 2>&1 || echo "no valid signature"
+          echo "--- icons in the bundle"
+          find "$APP" -name "clawd-*.png" | sort
+          echo "--- the tray app modules the Mac app reuses"
+          find "$APP" \( -name "clawd_tank_tray*" -o -name "hookctl*" -o -name "state.py*" \) | sort
+          echo "--- anything Windows-only that got in (should be empty)"
+          find "$APP" \( -iname "*tkinter*" -o -iname "*pystray*" \) | sort
+
+      - name: Selftest the built app
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 5
+        env:
+          CLAWD_TANK_NO_BLE: "1"
+          CLAWD_TANK_NO_PROMPT: "1"
+        run: |
+          mkdir -p screen
+          echo "Running: $APP_EXE --selftest"
+          code=0
+          "$APP_EXE" --selftest > screen/selftest.log 2>&1 || code=$?
+          cat screen/selftest.log
+          if [ "$code" -ne 0 ]; then
+            echo "::error::the selftest exited with code $code"
+            exit 1
+          fi
+          if ! grep -q "selftest ok" screen/selftest.log; then
+            echo "::error::the selftest did not print 'selftest ok'"
+            exit 1
+          fi
+
+      # Starts the app as a user would (test mode: no BLE, no hooks question), lets
+      # it open its flyout, takes a real screenshot and says whether it survived.
+      # The screen capture can come out blank on a runner; this step never fails the job.
+      - name: Launch the app and capture the screen
+        id: smoke
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          CLAWD_TANK_NO_BLE: "1"
+          CLAWD_TANK_NO_PROMPT: "1"
+          CLAWD_TANK_OPEN_FLYOUT: "1"
+        run: |
+          mkdir -p screen
+          "$APP_EXE" > screen/app-output.log 2>&1 &
+          APP_PID=$!
+          echo "Started the app, pid $APP_PID"
+          sleep 4
+          screencapture -x screen/screen-early.png || echo "screencapture failed (4 s)"
+          sleep 6
+          screencapture -x screen/screen.png || echo "screencapture failed (10 s)"
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "The app is still running 10 s after launch."
+            RUNNING=yes
+          else
+            CODE=0
+            wait "$APP_PID" || CODE=$?
+            echo "The app was no longer running after 10 s, exit code $CODE."
+            RUNNING=no
+          fi
+          echo "App still running after 10 s: $RUNNING" >> "$GITHUB_STEP_SUMMARY"
+          kill "$APP_PID" 2>/dev/null || true
+          sleep 2
+          kill -9 "$APP_PID" 2>/dev/null || true
+          pkill -f "Clawd Tank.app/Contents/MacOS" 2>/dev/null || true
+          cp "$HOME/Library/Logs/ClawdTank/clawd-tank.log" screen/clawd-tank.log \
+            || echo "no app log at ~/Library/Logs/ClawdTank/clawd-tank.log"
+          ls -l screen
+          [ "$RUNNING" = yes ]
+
+      - name: Upload the screen capture and the app's log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: flyout-screen
+          path: screen
+          if-no-files-found: warn
+
+      - name: Create DMG
+        id: dmg
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: host
+        run: |
+          mkdir -p dmg-staging
+          cp -R "dist/Clawd Tank.app" dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "Clawd Tank" \
+            -srcfolder dmg-staging \
+            -ov -format UDZO \
+            "dist/Clawd-Tank.dmg"
+          rm -rf dmg-staging
+
+      - name: Upload DMG as artifact
+        if: ${{ !cancelled() && steps.dmg.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Clawd-Tank-macOS
+          path: host/dist/Clawd-Tank.dmg
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: test-results.xml
+          if-no-files-found: warn
