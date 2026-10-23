@@ -324,6 +324,23 @@ def test_the_anchor_is_not_placed_without_a_window_or_a_screen(mac):
     assert not anchor_is_placed(object())
 
 
+def test_the_fallback_anchor_is_a_window_in_the_menu_bar_and_goes_away(mac):
+    """When the status item is not placed, the popover points at an invisible window at
+    the right end of the menu bar instead of the screen's corner."""
+    from clawd_tank_menubar.flyout import FlyoutController
+    ctrl = FlyoutController(lambda row: None)
+    view = ctrl._fallback_anchor_view()
+    window = view.window()
+    assert window is not None and window.isVisible()
+    screen = mac.NSScreen.mainScreen() or mac.NSScreen.screens()[0]
+    frame, area = window.frame(), screen.frame()
+    assert frame.origin.y + frame.size.height == area.origin.y + area.size.height   # touches the top
+    assert area.origin.x <= frame.origin.x and frame.origin.x + frame.size.width <= area.origin.x + area.size.width
+    ctrl._drop_fallback_anchor()
+    assert not window.isVisible() and ctrl._anchor_window is None
+    ctrl._drop_fallback_anchor()          # a second drop does nothing
+
+
 def test_the_snapshot_command_writes_six_pictures(mac, tmp_path, capsys):
     assert snapshot.main([str(tmp_path / "out")]) == 0
     printed = capsys.readouterr().out.split()

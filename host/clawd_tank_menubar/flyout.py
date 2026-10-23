@@ -60,6 +60,9 @@ CHECK = "\u2713"          # the check mark, as text
 # click: do not open it again.
 CLICK_GUARD_S = 0.4
 MENU_BAR_SLACK = 40.0   # how far below the screen's top edge a status item window may sit
+FALLBACK_W = 34.0       # the stand-in anchor: as wide as a status item
+FALLBACK_BAR_H = 24.0   # and as high as the menu bar, when the screen does not say
+FALLBACK_RIGHT_INSET = 120.0   # from the screen's right edge, left of the clock
 
 _EMPTY = FlyoutContent(TITLE, DOT_IDLE, (), "", ())
 
@@ -422,6 +425,7 @@ class FlyoutController:
         self._view = None
         self._shown = False
         self._closed_at = float("-inf")
+        self._anchor_window = None          # see _fallback_anchor_view
         # The view controller's own view stays the same for the popover's whole life;
         # the built flyout is swapped inside it. It is flipped so that when the
         # popover resizes it, the content keeps its place at the top.
@@ -473,8 +477,14 @@ class FlyoutController:
         # The app has no Dock icon, so it is not active when the status item is
         # clicked; a popover of an inactive app would not take clicks properly.
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        self._popover.showRelativeToRect_ofView_preferredEdge_(
-            status_button.bounds(), status_button, AppKit.NSMinYEdge)
+        if anchor_is_placed(status_button):
+            rect, view = status_button.bounds(), status_button
+        else:
+            view = self._fallback_anchor_view()
+            rect = view.bounds()
+            logger.warning("The status item is not on the menu bar yet: the flyout is "
+                           "anchored at the top right of the screen instead")
+        self._popover.showRelativeToRect_ofView_preferredEdge_(rect, view, AppKit.NSMinYEdge)
         self._shown = True
 
     def close(self) -> None:
@@ -483,6 +493,7 @@ class FlyoutController:
         self._shown = False
         self._closed_at = self._clock()
         self._popover.close()
+        self._drop_fallback_anchor()
 
     # --- internals ---
 
@@ -516,3 +527,34 @@ class FlyoutController:
         self._shown = False
         self._closed_at = self._clock()
         self._clear_hover()
+        self._drop_fallback_anchor()
+
+    def _fallback_anchor_view(self):
+        """A view for the popover to point at when the status item's own window is not
+        placed: an invisible window at the right end of the menu bar, where status items
+        live (under the pointer when the pointer is in the menu bar, as it is for a
+        click). Removed again when the popover closes."""
+        self._drop_fallback_anchor()
+        screen = AppKit.NSScreen.mainScreen() or AppKit.NSScreen.screens()[0]
+        full, visible = screen.frame(), screen.visibleFrame()
+        top = full.origin.y + full.size.height
+        bar_h = max(top - (visible.origin.y + visible.size.height), FALLBACK_BAR_H)
+        mouse = AppKit.NSEvent.mouseLocation()
+        in_bar = top - mouse.y <= MENU_BAR_SLACK and full.origin.x <= mouse.x <= full.origin.x + full.size.width
+        x = mouse.x if in_bar else full.origin.x + full.size.width - FALLBACK_RIGHT_INSET
+        rect = AppKit.NSMakeRect(x - FALLBACK_W / 2.0, top - bar_h, FALLBACK_W, bar_h)
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            rect, AppKit.NSWindowStyleMaskBorderless, AppKit.NSBackingStoreBuffered, False)
+        window.setOpaque_(False)
+        window.setBackgroundColor_(AppKit.NSColor.clearColor())
+        window.setIgnoresMouseEvents_(True)
+        window.setLevel_(AppKit.NSStatusWindowLevel)
+        window.setReleasedWhenClosed_(False)
+        window.orderFrontRegardless()
+        self._anchor_window = window            # AppKit would not keep it alive
+        return window.contentView()
+
+    def _drop_fallback_anchor(self) -> None:
+        window, self._anchor_window = self._anchor_window, None
+        if window is not None:
+            window.orderOut_(None)

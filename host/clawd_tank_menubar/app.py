@@ -61,6 +61,7 @@ STATUS_ITEM_POLL_S = 0.2        # look for rumps' status item this often ...
 STATUS_ITEM_POLL_MAX = 50       # ... for this many tries (10 s) before giving up
 FIRST_RUN_DELAY_S = 1.5         # the hooks question
 OPEN_FLYOUT_DELAY_S = 2.0       # CLAWD_TANK_OPEN_FLYOUT=1
+OPEN_FLYOUT_WAIT_S = 12.0       # ... then waits this long for the status item to be placed
 
 
 def _get_pref(key, default=None):
@@ -605,18 +606,25 @@ class ClawdTankApp(rumps.App, DaemonObserver):
         self._login_item.state = launchd.is_enabled()
         self._clicks.show_menu()
 
-    def _open_flyout_for_test(self, attempt: int = 0):
+    def _open_flyout_for_test(self, deadline: Optional[float] = None):
         """CLAWD_TANK_OPEN_FLYOUT=1: open the flyout without a click, once the status
-        item is on the menu bar (a popover opened before that lands in a screen corner)."""
+        item is on the menu bar (a popover opened before that lands in a screen corner).
+        Waits up to OPEN_FLYOUT_WAIT_S by the clock, not by a count of timer ticks."""
+        import time
         from .flyout import anchor_is_placed
         button = self._clicks.button()
         if button is None:
             logger.warning("Cannot open the flyout: the status item is not ready")
             return
-        if not anchor_is_placed(button) and attempt < STATUS_ITEM_POLL_MAX:
-            self._after(STATUS_ITEM_POLL_S, lambda: self._open_flyout_for_test(attempt + 1))
+        now = time.monotonic()
+        if deadline is None:
+            deadline = now + OPEN_FLYOUT_WAIT_S
+        placed = anchor_is_placed(button)
+        if not placed and now < deadline:
+            self._after(STATUS_ITEM_POLL_S, lambda: self._open_flyout_for_test(deadline))
             return
-        logger.info("Opening the flyout for the test aid (after %d waits)", attempt)
+        logger.info("Opening the flyout for the test aid (status item placed: %s, "
+                    "%.1f s before the deadline)", placed, deadline - now)
         self._refresh_hooks_status()
         self._refresh_flyout()
         self._ensure_flyout().show(button)
