@@ -542,6 +542,7 @@ class FlyoutController:
         mouse = AppKit.NSEvent.mouseLocation()
         in_bar = top - mouse.y <= MENU_BAR_SLACK and full.origin.x <= mouse.x <= full.origin.x + full.size.width
         x = mouse.x if in_bar else full.origin.x + full.size.width - FALLBACK_RIGHT_INSET
+        x = min(max(x, full.origin.x + FALLBACK_W / 2.0), full.origin.x + full.size.width - FALLBACK_W / 2.0)
         rect = AppKit.NSMakeRect(x - FALLBACK_W / 2.0, top - bar_h, FALLBACK_W, bar_h)
         window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect, AppKit.NSWindowStyleMaskBorderless, AppKit.NSBackingStoreBuffered, False)
