@@ -9,7 +9,9 @@ logger = logging.getLogger("clawd-tank.menubar")
 
 DEFAULTS = {
     "ble_enabled": True,
-    "sim_enabled": True,
+    # Off: the target is a real bar. This fork builds the app without the SDL
+    # simulator binary, and the Simulator submenu is where to switch it on.
+    "sim_enabled": False,
     "sim_window_visible": True,
     "sim_always_on_top": True,
 }
