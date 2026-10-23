@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/app-icon.svg" width="128" height="128" alt="Clawd Tank app icon">
+  <img src="assets/tray-icon.png" width="128" alt="Clawd, the tray icon">
 </p>
 
 <h1 align="center">Clawd Tank on the Waveshare bar</h1>
