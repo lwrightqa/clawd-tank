@@ -212,10 +212,14 @@ class DaemonEngine:
     def _on_started(self, endpoint: str) -> None:
         self.endpoint = endpoint
         daemon = self._daemon
+        restored = 0
         if daemon is not None:
-            self._emit("display", {"state": daemon.display_state()})
-        logger.info("Engine started: hooks reach the daemon at %s, Bluetooth %s",
-                    endpoint, "off (test mode)" if self.no_ble else "on")
+            state = daemon.display_state()
+            restored = len(state.get("anims") or []) + int(state.get("overflow", 0) or 0)
+            self._emit("display", {"state": state})
+        logger.info("Engine started: hooks reach the daemon at %s, Bluetooth %s, %d open session%s kept",
+                    endpoint, "off (test mode)" if self.no_ble else "on",
+                    restored, "" if restored == 1 else "s")
         self._set_status(EngineStatus.RUNNING)
         self._started.set()
 
