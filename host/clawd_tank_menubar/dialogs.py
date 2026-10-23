@@ -6,10 +6,11 @@ activates it first, or the alert would open behind the window in front.
 
 import AppKit
 
+from .activation import keeper
+
 
 def _alert(title: str, text: str):
-    # NSApp is the shared NSApplication; ``AppKit.NSApp`` is not always a plain name in PyObjC.
-    AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    keeper.activate()       # remembers the app in front; give_back() returns to it after the dialog
     alert = AppKit.NSAlert.alloc().init()
     alert.setMessageText_(title)
     alert.setInformativeText_(text)
@@ -26,7 +27,9 @@ def ask_yes_no(title: str, text: str) -> bool:
     alert = _alert(title, text)
     alert.addButtonWithTitle_("Yes")     # the first button added is the default one
     alert.addButtonWithTitle_("No")
-    return alert.runModal() == AppKit.NSAlertFirstButtonReturn
+    answered_yes = alert.runModal() == AppKit.NSAlertFirstButtonReturn
+    keeper.give_back()
+    return answered_yes
 
 
 def show_message(title: str, text: str) -> None:
@@ -34,3 +37,4 @@ def show_message(title: str, text: str) -> None:
     alert = _alert(title, text)
     alert.addButtonWithTitle_("OK")
     alert.runModal()
+    keeper.give_back()

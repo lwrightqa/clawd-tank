@@ -13,7 +13,9 @@ equivalent:
 
 import ctypes
 import os
+import subprocess
 import sys
+import time
 from typing import Dict, Optional, Tuple
 
 IS_WINDOWS = sys.platform == "win32"
@@ -77,11 +79,25 @@ _EPOCH_DELTA_100NS = 116444736000000000
 START_GRACE_SECS = 10.0
 
 
+def _process_start_time_posix(pid: int) -> Optional[float]:
+    """macOS and Linux: ``ps -o lstart=`` prints the start in local time, to the second
+    ("Fri Oct 23 11:34:02 2026"). The C locale keeps the month and day names English."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+            timeout=2.0, env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+        return time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")) if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def process_start_time(pid: Optional[int]) -> Optional[float]:
     """When the process was created, in epoch seconds; None when it cannot be told
-    (not Windows, no such process, access refused). Never raises."""
-    if not IS_WINDOWS or pid is None or pid <= 0:
+    (no such process, access refused, no ``ps``). Never raises."""
+    if pid is None or pid <= 0:
         return None
+    if not IS_WINDOWS:
+        return _process_start_time_posix(pid)
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
         kernel32.OpenProcess.restype = ctypes.c_void_p

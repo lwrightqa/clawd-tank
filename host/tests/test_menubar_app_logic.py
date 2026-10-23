@@ -552,8 +552,9 @@ def test_enable_in_a_bundle_starts_the_bundle_executable(agent, monkeypatch):
     plist = plistlib.loads(path.read_bytes())
     assert plist["ProgramArguments"] == [exe]
     assert plist["Label"] == launchd.PLIST_LABEL and plist["RunAtLoad"] is True
-    assert ran == [["launchctl", "bootstrap", "gui/501", str(path)]]
+    assert ran == []                      # not loaded now: a second copy would end this one
     assert launchd.is_enabled() and not launchd.is_stale()
+    assert not list(path.parent.glob("*.tmp"))          # written whole, then renamed
 
 
 def test_in_a_bundle_without_a_bundle_path_sys_executable_is_the_fallback(monkeypatch):
@@ -610,14 +611,35 @@ def test_no_plist_is_not_stale_and_a_broken_one_is_not_a_crash(agent):
     assert not launchd.is_stale()
 
 
-def test_disable_removes_the_plist(agent):
+def test_disable_removes_the_plist_and_unloads_a_stale_job(agent, monkeypatch):
     path, ran = agent
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
     write_plist(path, ["x"])
     launchd.disable()
     assert not path.exists()
-    assert ran == [["launchctl", "bootout", "gui/501", str(path)]]
+    assert ran == [["launchctl", "bootout", "gui/501/com.clawd-tank.menubar"]]
     launchd.disable()                                           # nothing there: nothing to do
     assert len(ran) == 1
+
+
+def test_disable_from_the_launch_agent_job_only_removes_the_file(agent, monkeypatch):
+    """bootout would stop the job, which is this process, before the file was removed."""
+    path, ran = agent
+    monkeypatch.setenv("XPC_SERVICE_NAME", launchd.PLIST_LABEL)
+    write_plist(path, ["x"])
+    launchd.disable()
+    assert not path.exists()
+    assert ran == []
+
+
+def test_an_app_started_by_hand_is_not_the_job(monkeypatch):
+    for value in ("0", "application.com.clawd-tank.menubar.123.456", ""):
+        monkeypatch.setenv("XPC_SERVICE_NAME", value)
+        assert not launchd._is_the_job()
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    assert not launchd._is_the_job()
+    monkeypatch.setenv("XPC_SERVICE_NAME", launchd.PLIST_LABEL)
+    assert launchd._is_the_job()
 
 
 # --- the icons -------------------------------------------------------------------------------

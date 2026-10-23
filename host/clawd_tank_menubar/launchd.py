@@ -52,7 +52,12 @@ def is_enabled() -> bool:
 
 
 def enable() -> None:
-    """Write the launchd plist and load the agent."""
+    """Write the launch agent's plist; launchd starts the app from it at the next login.
+
+    The agent is not loaded now. ``launchctl bootstrap`` of a RunAtLoad job starts it at
+    once, and a second copy of the app taking over from the first (the menu bar daemon
+    stops the daemon it finds, with SIGTERM) would end the copy the user is looking at.
+    """
     PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     plist = {
@@ -62,14 +67,11 @@ def enable() -> None:
         "KeepAlive": False,
     }
 
-    with open(PLIST_PATH, "wb") as f:
+    # Written whole, then renamed, so launchd never reads half a file.
+    tmp = PLIST_PATH.with_name(PLIST_PATH.name + ".tmp")
+    with open(tmp, "wb") as f:
         plistlib.dump(plist, f)
-
-    uid = os.getuid()
-    subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{uid}", str(PLIST_PATH)],
-        capture_output=True,
-    )
+    os.replace(tmp, PLIST_PATH)
 
 
 def is_stale() -> bool:
@@ -87,15 +89,28 @@ def is_stale() -> bool:
     return False
 
 
+def _is_the_job() -> bool:
+    """True when launchd started this process as the launch agent (at login). launchd
+    puts the job's label in XPC_SERVICE_NAME; an app started from Finder or a terminal
+    gets "application.<bundle id>..." or "0"."""
+    return os.environ.get("XPC_SERVICE_NAME") == PLIST_LABEL
+
+
 def disable() -> None:
-    """Unload and remove the launchd plist."""
+    """Remove the launch agent's plist, so the app is not started at the next login.
+
+    When this process is the agent's job, ``launchctl bootout`` would stop the job, which
+    is the app itself, before it had removed the file. Then only the file goes: the loaded
+    job ends with the login session and nothing starts it again. Otherwise a stale loaded
+    job (an older version loaded it) is unloaded too."""
     if not PLIST_PATH.exists():
         return
 
+    PLIST_PATH.unlink(missing_ok=True)
+    if _is_the_job():
+        return
     uid = os.getuid()
     subprocess.run(
-        ["launchctl", "bootout", f"gui/{uid}", str(PLIST_PATH)],
+        ["launchctl", "bootout", f"gui/{uid}/{PLIST_LABEL}"],
         capture_output=True,
     )
-
-    PLIST_PATH.unlink(missing_ok=True)

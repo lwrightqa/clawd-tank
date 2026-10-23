@@ -8,7 +8,7 @@ Claude Code hook --> ~/.clawd-tank/clawd-tank-notify --Unix socket ~/.clawd-tank
 
 The app is the original project's menu bar app (`host/clawd_tank_menubar/`, rumps and py2app) with the flyout added. The flyout reuses the Windows app's logic for the text it shows and for the hooks question, so both say the same things.
 
-**Status: this has not been run on a real Mac, and never with the bar.** It is built, tested and snapshotted by a GitHub Actions workflow on GitHub's Mac runner. The list of what that does and does not prove is at the end: [What is not verified](#what-is-not-verified).
+**Status: this has not been run on a real Mac, and never with the bar.** It is built, tested and snapshotted by a GitHub Actions workflow on GitHub's Mac runner (macOS 14, Apple silicon), where the built app has started, put Clawd in the menu bar and opened the flyout under it. The list of what that does and does not prove is at the end: [What is not verified](#what-is-not-verified).
 
 ## Get the app
 
@@ -23,7 +23,7 @@ A run whose tests failed still uploads everything it built, so check the run's r
 | Artifact | Holds |
 | --- | --- |
 | `flyout-snapshots` | PNGs of the flyout drawn by the app's own code: connected, scanning and conflict, each in light and dark |
-| `flyout-screen` | a screenshot of the runner's screen with the app running and its flyout open (it may come out blank), the output of the selftest, and the app's log |
+| `flyout-screen` | a screenshot of the runner's screen with the app running and its flyout open under the Clawd icon, the output of the selftest, and the app's log |
 | `test-results` | the host tests' result as JUnit XML |
 
 When this fork publishes a release, its disk image would come from the existing build workflows (`build-macos-app.yml` and `release.yml`, upstream's, unchanged). They have not been run for this fork.
@@ -92,7 +92,7 @@ Claude Code tells the daemon about a session only through its hooks, so a sessio
 
 ## Start at login
 
-Tick **Start at login** in the flyout (or **Launch at Login** in the menu). It writes a launchd user agent, `~/Library/LaunchAgents/com.clawd-tank.menubar.plist` (per user, no administrator rights), that runs the app's own executable when you log in. Untick it to unload the agent and delete the file. If you move the app, start it once from its new place: the agent is repointed. macOS 13 and later may list it under **System Settings > General > Login Items & Extensions > Allow in the Background**; if you switch it off there, it will not start.
+Tick **Start at login** in the flyout (or **Launch at Login** in the menu). It writes a launchd user agent, `~/Library/LaunchAgents/com.clawd-tank.menubar.plist` (per user, no administrator rights), that runs the app's own executable when you log in. It takes effect at your next login: ticking it does not start a second copy now. Untick it to delete the file (and to unload the agent if an older version had loaded it); unticking from a copy that the agent itself started at login leaves that copy running. If you move the app, start it once from its new place: the agent is repointed. macOS 13 and later may list it under **System Settings > General > Login Items & Extensions > Allow in the Background**; if you switch it off there, it will not start.
 
 ## Files, log, settings
 
@@ -153,13 +153,13 @@ py2app bundles `clawd_tank_daemon` and `clawd_tank_menubar` whole, plus only thr
 ## What is not verified
 
 - **No real Mac, no bar.** Nothing here has been run on a Mac by hand, and never with the bar. The Bluetooth link, the brightness slider and the whole hook-to-bar path on macOS are the original project's code paths, which have not been run on this board.
-- **What the Mac runner proves.** The workflow runs the host tests, draws the flyout, builds the bundle and starts it in test mode. Whether the latest run is green is shown on its page, not claimed here. The tests use fakes for Bluetooth; the AppKit code is exercised only by that runner.
+- **What the Mac runner proves.** The workflow runs the host tests (the whole suite passes on macOS), draws the flyout, builds the bundle, runs the built app's selftest and starts it in test mode (no Bluetooth). In the last runs the app stayed up, its status item sat on the menu bar and the flyout opened under it. The tests use fakes for Bluetooth; the AppKit code is exercised only by that runner.
 - **Apple silicon only.** The runner is `macos-14` (Apple silicon). The app is built there and has not been built or tried for Intel Macs.
 - **macOS versions.** The code is written for macOS 12 and later, but the only version it has run on is the runner's, 14. Not tried on 12, 13 or 15.
 - **Not notarised.** There is no Developer ID signature. Whether py2app's own ad-hoc signature is on the bundle is printed in the workflow's *Inspect the bundle* step, and this guide does not assume it. Expect the Gatekeeper steps above on every machine and every new download.
 - **The simulator is not bundled.** The Simulator menu has nothing to start.
-- **The flyout's look.** The snapshots are the real view drawn off screen by the runner. The screenshot of the runner's screen is a best effort and may be blank or miss the popover. Nothing has been compared with a real menu bar, a notch, a second display, or the Windows flyout side by side.
-- **Not seen by hand:** the Bluetooth permission dialog (its wording is from the app's `Info.plist`), the hooks dialog on a Mac, switching between light and dark while the flyout is open, a control-click, and **Start at login** in the built app (the launchd agent).
+- **The flyout's look.** The snapshots are the real view drawn off screen by the runner, and the runner's screenshot shows the real popover under the icon in light mode. Nothing has been compared with a real menu bar on a Mac in use, a notch, a second display, dark mode on screen, or the Windows flyout side by side.
+- **Not seen by hand:** a real click on the icon, the Bluetooth permission dialog (its wording is from the app's `Info.plist`), the hooks dialog on a Mac, whether the keyboard goes back to the app you were typing in when the flyout closes (the code does it; no test can watch focus), switching between light and dark while the flyout is open, a control-click, and **Start at login** in the built app (the launchd agent).
 - **The helper script needs a `python3`** on the `PATH` when Claude Code runs a hook. On a Mac without one, macOS may offer to install the Command Line Tools the first time a hook runs; that has not been tried.
 
 ## Credits

@@ -24,6 +24,7 @@ from typing import Callable, List, Optional
 import AppKit
 import objc
 
+from . import activation
 from .flyout_model import (DOT_CONNECTED, DOT_ERROR, DOT_IDLE, ROW_LOGIN, TITLE,
                            FlyoutContent, RowSpec)
 
@@ -59,6 +60,7 @@ CHECK = "\u2713"          # the check mark, as text
 # and then reaches the button as a click of its own. A close this recent means that
 # click: do not open it again.
 CLICK_GUARD_S = 0.4
+FOCUS_BACK_DELAY_S = 0.08   # see FlyoutController._popover_closed
 MENU_BAR_SLACK = 40.0   # how far below the screen's top edge a status item window may sit
 FALLBACK_W = 34.0       # the stand-in anchor: as wide as a status item
 FALLBACK_BAR_H = 24.0   # and as high as the menu bar, when the screen does not say
@@ -475,8 +477,9 @@ class FlyoutController:
         self._clear_hover()
         _log_anchor(status_button)
         # The app has no Dock icon, so it is not active when the status item is
-        # clicked; a popover of an inactive app would not take clicks properly.
-        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        # clicked; a popover of an inactive app would not take clicks properly. The
+        # keeper remembers the app that was in front, for when the popover closes.
+        activation.keeper.activate()
         if anchor_is_placed(status_button):
             rect, view = status_button.bounds(), status_button
         else:
@@ -528,6 +531,11 @@ class FlyoutController:
         self._closed_at = self._clock()
         self._clear_hover()
         self._drop_fallback_anchor()
+        # A moment later, so that a click on another app that closed the popover has
+        # activated that app first (then there is nothing to give back), and so that a
+        # row that opens a dialog has started it (the dialog gives the focus back).
+        from PyObjCTools import AppHelper
+        AppHelper.callLater(FOCUS_BACK_DELAY_S, activation.keeper.give_back)
 
     def _fallback_anchor_view(self):
         """A view for the popover to point at when the status item's own window is not

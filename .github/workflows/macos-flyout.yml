@@ -108,10 +108,13 @@ jobs:
           codesign -dv --verbose=2 "$APP" 2>&1 || echo "no valid signature"
           echo "--- icons in the bundle"
           find "$APP" -name "clawd-*.png" | sort
-          echo "--- the tray app modules the Mac app reuses"
-          find "$APP" \( -name "clawd_tank_tray*" -o -name "hookctl*" -o -name "state.py*" \) | sort
-          echo "--- anything Windows-only that got in (should be empty)"
-          find "$APP" \( -iname "*tkinter*" -o -iname "*pystray*" \) | sort
+          # py2app keeps pure-Python modules that are not in "packages" inside a zip.
+          ZIP="$(ls "$APP"/Contents/Resources/lib/python3*.zip | head -n 1)"
+          echo "--- the tray app modules the Mac app reuses (in $ZIP)"
+          unzip -Z1 "$ZIP" | grep -E '^clawd_tank_tray/(__init__|state|hookctl|options)\.pyc$' | sort || echo "(none found)"
+          echo "--- anything Windows-only that got in (should be none)"
+          { unzip -Z1 "$ZIP" | grep -E '^(_?tkinter|pystray)'; find "$APP" \( -iname "*tkinter*" -o -iname "*pystray*" \); } | sort || true
+          echo "(end of the list)"
 
       - name: Selftest the built app
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

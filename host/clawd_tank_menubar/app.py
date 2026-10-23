@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -258,7 +259,13 @@ class ClawdTankApp(rumps.App, DaemonObserver):
     def _after(self, seconds: float, fn) -> None:
         """Run ``fn()`` once, ``seconds`` from now, on the main thread (a one-shot
         rumps timer)."""
+        due = time.monotonic() + seconds
+
         def fire(timer):
+            # rumps.Timer's first tick comes at once (its fire date is "now") and the
+            # interval only spaces the ticks after it: skip them until the time is up.
+            if time.monotonic() < due - 0.02:
+                return
             timer.stop()
             try:
                 self._oneshots.remove(timer)
@@ -610,7 +617,6 @@ class ClawdTankApp(rumps.App, DaemonObserver):
         """CLAWD_TANK_OPEN_FLYOUT=1: open the flyout without a click, once the status
         item is on the menu bar (a popover opened before that lands in a screen corner).
         Waits up to OPEN_FLYOUT_WAIT_S by the clock, not by a count of timer ticks."""
-        import time
         from .flyout import anchor_is_placed
         button = self._clicks.button()
         if button is None:
