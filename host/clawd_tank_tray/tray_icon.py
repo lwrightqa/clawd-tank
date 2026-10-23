@@ -10,14 +10,15 @@ with a cached handle, and nothing at all happens while the picture stays the sam
 
 Two other changes: the menu is rebuilt just before it opens, so its checkbox
 and status line show the state of that moment (the Start with Windows box reads
-the registry then), and a left click runs the default item ("Open").
+the registry then), and a left click calls ``on_click`` (the app toggles the
+flyout with it), or runs the default item ("Open") when there is none.
 """
 
 import ctypes
 import logging
 import sys
 from ctypes import wintypes
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pystray
 from PIL import Image
@@ -140,11 +141,25 @@ class ClawdTrayIcon(_backend.Icon if _backend else pystray.Icon):  # type: ignor
     refreshed as it opens."""
 
     def __init__(self, *args, hicons: Optional[HiconCache] = None,
-                 on_menu_open: Optional[Callable[[], None]] = None, **kwargs):
+                 on_menu_open: Optional[Callable[[], None]] = None,
+                 on_click: Optional[Callable[[], None]] = None, **kwargs):
         super().__init__(*args, **kwargs)
         # not `hicons or HiconCache()`: an empty cache has len 0 and is falsy
         self._hicons = hicons if hicons is not None else HiconCache()
         self._on_menu_open = on_menu_open
+        self._on_click = on_click
+
+    def shell_ids(self) -> List[Tuple[int, int]]:
+        """The (window handle, id) pairs this icon may be registered with in the
+        notification area, which is what Shell_NotifyIconGetRect needs to say where
+        the icon is; empty until the icon's thread has made its window. pystray
+        passes ``hID=id(self)``, but ``NOTIFYICONDATAW`` has no such field (it is
+        ``uID``), so the id the shell holds is 0; the cut-down ``id(self)`` is listed
+        too, in case a later pystray sets it. The first pair the shell knows wins."""
+        hwnd = getattr(self, "_hwnd", None)
+        if not hwnd:
+            return []
+        return [(hwnd, 0), (hwnd, ctypes.c_uint(id(self)).value)]
 
     # pystray calls these around every image change.
     def _release_icon(self) -> None:
@@ -155,6 +170,12 @@ class ClawdTrayIcon(_backend.Icon if _backend else pystray.Icon):  # type: ignor
             self._icon_handle = self._hicons.get(self.icon)
 
     def _on_notify(self, wparam, lparam):
+        if lparam == _backend.win32.WM_LBUTTONUP and self._on_click is not None:
+            try:
+                self._on_click()   # on the tray thread: only post a message
+            except Exception:
+                logger.exception("the tray click handler failed")
+            return None
         if lparam == _backend.win32.WM_RBUTTONUP:
             try:
                 if self._on_menu_open:

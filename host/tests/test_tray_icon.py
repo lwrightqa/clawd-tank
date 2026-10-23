@@ -144,3 +144,86 @@ def test_right_click_refreshes_the_menu_before_it_opens(monkeypatch):
     order.clear()
     icon._on_notify(0, _backend.win32.WM_LBUTTONUP)
     assert order == ["popup"]  # only a right click rebuilds it
+
+
+def test_a_left_click_calls_on_click_instead_of_the_default_item():
+    clicked, opened = [], []
+    menu = pystray.Menu(pystray.MenuItem("Open", lambda: opened.append(1), default=True),
+                        pystray.MenuItem("Quit", lambda: None))
+    icon = ClawdTrayIcon("t", icon=IconSet().icon("idle", 16), title="x", menu=menu,
+                         on_click=lambda: clicked.append(1))
+    icon._on_notify(0, _backend.win32.WM_LBUTTONUP)
+    assert clicked == [1] and opened == []
+    icon._hicons.clear()
+
+
+def test_a_failing_click_handler_is_logged_and_does_not_stop_the_tray_thread(caplog):
+    def boom():
+        raise RuntimeError("handler broke")
+
+    icon = ClawdTrayIcon("t", icon=IconSet().icon("idle", 16), title="x", on_click=boom)
+    with caplog.at_level("ERROR"):
+        icon._on_notify(0, _backend.win32.WM_LBUTTONUP)      # must not raise
+    assert "click handler failed" in caplog.text
+    icon._hicons.clear()
+
+
+def test_the_right_click_still_opens_the_menu_when_there_is_an_on_click(monkeypatch):
+    icon = ClawdTrayIcon("t", icon=IconSet().icon("idle", 16), title="x",
+                         menu=pystray.Menu(pystray.MenuItem("A", lambda: None)),
+                         on_click=lambda: None)
+    order = []
+    monkeypatch.setattr(icon, "update_menu", lambda: order.append("update_menu"))
+    monkeypatch.setattr(_backend.Icon, "_on_notify", lambda self, w, l: order.append("popup"))
+    icon._on_notify(0, _backend.win32.WM_RBUTTONUP)
+    assert order == ["update_menu", "popup"]
+    icon._hicons.clear()
+
+
+def test_shell_ids_are_what_shell_notify_icon_get_rect_needs():
+    icon = ClawdTrayIcon("t", icon=IconSet().icon("idle", 16), title="x")
+    assert icon.shell_ids() == []                            # the tray thread has not made its window
+    icon._hwnd = 0x1234
+    assert icon.shell_ids() == [(0x1234, 0), (0x1234, id(icon) & 0xFFFFFFFF)]
+    icon._hicons.clear()
+
+
+def test_pystray_registers_its_icon_with_id_0_so_the_shell_ids_start_there():
+    """pystray passes hID=id(self) to a structure whose field is called uID, so the shell
+    holds id 0. If this ever fails, pystray changed and shell_ids should say so."""
+    from ctypes import sizeof
+
+    data = _backend.win32.NOTIFYICONDATAW(cbSize=sizeof(_backend.win32.NOTIFYICONDATAW), hWnd=1,
+                                          hID=12345, uFlags=0)
+    assert data.uID == 0
+
+
+def test_the_shell_says_where_the_real_icon_is_and_the_flyout_anchors_to_it():
+    """A real icon in the real notification area (for a second): Shell_NotifyIconGetRect
+    answers for the id pystray really used, and the placement function anchors to it."""
+    import time
+
+    from clawd_tank_tray import flyout as fl
+    from clawd_tank_tray.winutil import Win32Shell
+
+    icon = ClawdTrayIcon("ClawdTankRectTest", icon=IconSet().icon("idle", 16), title="rect test",
+                         hicons=HiconCache())
+    ready = threading.Event()
+    icon.run_detached(setup=lambda i: (setattr(i, "visible", True), ready.set()))
+    try:
+        assert ready.wait(10)
+        shell = Win32Shell(icon.shell_ids)
+        rect = None
+        for _ in range(50):                                  # the shell takes a moment to place it
+            rect = shell.icon_rect()
+            if rect:
+                break
+            time.sleep(0.1)
+        assert rect is not None and rect.width > 0 and rect.height > 0
+        monitor = Win32Shell().monitor_at(*rect.centre)
+        assert monitor is not None and monitor[0].contains(*rect.centre)
+        placement = fl.place_flyout(shell, (300, 360))
+        assert placement.anchored and placement.anchor == rect
+        assert placement.work.left <= placement.x and placement.x + 300 <= placement.work.right
+    finally:
+        icon.shutdown()

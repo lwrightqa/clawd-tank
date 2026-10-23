@@ -9,7 +9,7 @@ from . import APP_NAME, __version__
 from .logsetup import ensure_std_streams, install_excepthooks, setup_logging
 from .options import Options, log_path, parse_args
 from .single_instance import SingleInstance
-from .winutil import ErrorBoxes, set_dpi_aware
+from .winutil import ErrorBoxes, allow_set_foreground_window, set_dpi_aware
 
 logger = logging.getLogger("clawd-tank.tray")
 
@@ -74,6 +74,12 @@ def selftest() -> int:
         destroy_hicon(hicon_from_image(Image.new("RGBA", (16, 16), (255, 128, 0, 255))))
         return "pystray, native icon handle"
 
+    def flyout_check():
+        from . import flyout, theme, window  # noqa: F401
+        from .winutil import _libs
+        _libs()   # user32, dwmapi and shell32 with the calls the flyout makes
+        return f"{theme.current_theme().name} theme, window styling and placement calls"
+
     logger.info("selftest: %s %s, Python %s, frozen=%s", APP_NAME, __version__,
                 platform.python_version(), getattr(sys, "frozen", False))
     check("tkinter", tk_check)
@@ -82,6 +88,7 @@ def selftest() -> int:
     check("daemon", daemon_check)
     check("assets", assets_check)
     check("tray", tray_check)
+    check("flyout", flyout_check)
     for line in problems:
         print("selftest FAILED:", line, file=sys.stderr)
     if not problems:
@@ -97,13 +104,19 @@ def main(argv=None) -> int:
     if options.command in ("quit", "show"):
         # Talk to the running instance, if any. Touch nothing else (not the log:
         # the running instance has it open).
+        if options.command == "show":
+            allow_set_foreground_window()   # so the flyout can take the focus
         return 0 if instance.signal(options.command, wait=0.0) else 1
     if options.command == "selftest":
         return selftest()
 
     set_dpi_aware()  # before any window or tray icon exists
     if not instance.acquire():
-        instance.signal("show", wait=3.0)  # the running one comes forward
+        # This launch was started by the user's click, so it may hand the foreground
+        # to the running one, which opens its flyout and takes the focus (and so can
+        # close it again when you click elsewhere).
+        allow_set_foreground_window()
+        instance.signal("show", wait=3.0)
         return 0
 
     setup_logging(log_path(), options.debug)

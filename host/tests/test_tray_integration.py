@@ -148,3 +148,97 @@ def test_conflict_then_retry_then_a_hook_then_quit(tmp_path, monkeypatch, capfd)
     os.close(daemon_mod._acquire_lock(takeover=False))
     assert instance.acquire()  # the single-instance name was released
     instance.release()
+
+
+def test_the_flyout_of_the_running_app_toggles_and_is_a_borderless_tool_window(
+        tmp_path, monkeypatch, capfd):
+    """The same real app (tkinter loop, tray icon, engine without Bluetooth), driven the way the
+    tray drives it: "show" messages and left-click "toggle" messages stamped with the click time.
+    The flyout is a real window with a real handle but invisible and off-screen (transparent,
+    far outside every monitor, no focus taken), so nothing shows on the desktop."""
+    from clawd_tank_tray import flyout as fl
+    from clawd_tank_tray import winutil
+    from clawd_tank_tray.window import FlyoutWindow
+
+    far = fl.Rect(-24000, -24000, -22000, -23000)
+
+    def far_away(size, scale):
+        x, y = fl.flyout_position(far, "bottom", size, scale)
+        return fl.Placement(x, y, far, "bottom", None)
+
+    opened = []
+    real_open = FlyoutWindow._open
+
+    def spy(self):
+        real_open(self)
+        style, ex = winutil.window_styles(self.hwnd)
+        opened.append({"style": style, "ex": ex, "rect": winutil.window_rect(self.hwnd),
+                       "visible": self.visible})
+
+    monkeypatch.setattr(FlyoutWindow, "_open", spy)
+    monkeypatch.setattr(daemon_mod, "PID_PATH", tmp_path / "daemon.pid")
+    monkeypatch.setattr(daemon_mod, "LOCK_PATH", tmp_path / "daemon.lock")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    run_key = rf"Software\ClawdTankTest\{uuid.uuid4().hex}\Run"
+    instance = SingleInstance(f"itest-{uuid.uuid4().hex[:8]}")
+    assert instance.acquire()
+    app = TrayApp(
+        Options(no_ble=True, no_prompt=True, minimized=True, tcp_port=free_port()),
+        instance=instance,
+        hooks=HookManager(tmp_path / "claude" / "settings.json", which=lambda n: "py.exe"),
+        config=AppConfig(tmp_path / "state.json"),
+        autostart=Autostart(run_key, command="x"),
+        window_options={"placer": far_away, "opacity": 0.0, "take_focus": False, "animate": False})
+
+    seen, errors = {}, []
+
+    def drive():
+        try:
+            wait_for(lambda: app.view.engine == EngineStatus.RUNNING, what="the engine running")
+            wait_for(lambda: app.window is not None and app.tray is not None, what="the window")
+            assert not app.window.visible                        # --minimized: it starts hidden
+            app.post("show")                                     # a second launch, --show, the Open item
+            wait_for(lambda: app.window.visible, what="the flyout opening")
+            time.sleep(fl.REOPEN_GUARD + 0.2)
+            app.post("toggle", time.monotonic())                 # a left click on the tray icon: close
+            wait_for(lambda: not app.window.visible, what="the flyout closing")
+            seen["closed_by"] = app.window.guard.closed_by
+            app.post("toggle", time.monotonic())                 # click again: open
+            app.post("toggle", time.monotonic())                 # a double click's second half: ignored
+            wait_for(lambda: app.window.visible, what="the flyout opening again")
+            time.sleep(0.4)
+            seen["still_open_after_double_click"] = app.window.visible
+            app.post("show")                                     # a "show" never closes it
+            time.sleep(0.4)
+            seen["still_open_after_show"] = app.window.visible
+        except BaseException as e:  # noqa: BLE001 - reported to the test below
+            errors.append(e)
+        finally:
+            app.post("quit")
+
+    driver = threading.Thread(target=drive, name="itest-flyout-driver", daemon=True)
+    driver.start()
+    try:
+        with capfd.disabled():
+            code = app.run()
+    finally:
+        driver.join(30)
+        instance.release()
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, run_key)
+        except OSError:
+            pass
+
+    assert not errors, errors
+    assert code == 0
+    assert seen == {"closed_by": "toggle", "still_open_after_double_click": True,
+                    "still_open_after_show": True}
+    assert len(opened) == 2, opened                              # shown twice; the extra clicks did nothing
+    for window in opened:
+        assert window["visible"]
+        assert window["style"] & winutil.WS_POPUP
+        assert not window["style"] & winutil.WS_CAPTION, "the flyout has a title bar"
+        assert not window["style"] & winutil.WS_THICKFRAME
+        assert window["ex"] & winutil.WS_EX_TOOLWINDOW, "the flyout would have a taskbar button"
+        assert not window["ex"] & winutil.WS_EX_APPWINDOW
+        assert window["rect"].right < 0                          # off-screen, as arranged
