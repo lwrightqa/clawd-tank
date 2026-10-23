@@ -5,7 +5,6 @@
 /**
  * RGB LED driver for Waveshare ESP32-C6-LCD-1.47 onboard WS2812B.
  * Single addressable LED on GPIO8, driven via RMT peripheral.
- * MiniBar bar port (ESP32-S3-Touch-LCD-3.49 V2): the board has no LED, so every call is a no-op (rgb_led.c).
  */
 
 void rgb_led_init(void);

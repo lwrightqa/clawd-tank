@@ -1,5 +1,4 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# MiniBar bar (ESP32-S3, 16 MB flash): upstream's layout, the factory app grown to the end of the flash.
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0xFF0000,
+factory,  app,  factory, 0x10000, 0x7F0000,

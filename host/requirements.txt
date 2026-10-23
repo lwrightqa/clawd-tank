@@ -1,6 +1,5 @@
 bleak>=0.21.0
-# menu bar app: macOS only (it pulls in pyobjc, which cannot install elsewhere)
-rumps>=0.4.0; sys_platform == "darwin"
+rumps>=0.4.0
 
 # dev/test dependencies
 pytest>=7.0

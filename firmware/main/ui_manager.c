@@ -6,7 +6,6 @@
 #include "config_store.h"
 #include "display.h"
 #include "rgb_led.h"
-#include "layout.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <time.h>
@@ -22,20 +21,14 @@ typedef enum {
     UI_STATE_DISCONNECTED,
 } ui_state_t;
 
-/* Scene width beside the notification panel. 320 layout: 107 px, the panel takes the other 213.
- * Wide layout: the panel is NOTIF_PANEL_WIDTH_WIDE px and the scene keeps the rest (460 px on the
- * 640 x 172 MiniBar bar: three 153 px lanes). Chosen at run time in ui_manager_init from the display width. */
-#define SCENE_NOTIF_WIDTH_320   107
-#define NOTIF_PANEL_WIDTH_WIDE  180     /* was 300, then 220: the cards never used it all; two lines still hold a message */
-#define SCENE_ANIM_MS           400
+#define SCENE_FULL_WIDTH   320
+#define SCENE_NOTIF_WIDTH  107
+#define SCENE_ANIM_MS      400
 
 /* ---------- Module state ---------- */
 
 static ui_state_t s_state = UI_STATE_DISCONNECTED;
 static notification_store_t s_store;
-
-static int s_full_width = LAYOUT_BASE_WIDTH;        /* the display width: the scene's full width */
-static int s_notif_width = SCENE_NOTIF_WIDTH_320;   /* the scene's width while the panel is open */
 
 /* Protects all LVGL calls and store mutations that happen from two contexts:
  *   - ui_task (via ui_manager_handle_event + ui_manager_tick → lv_timer_handler)
@@ -55,7 +48,6 @@ static scene_t *s_scene = NULL;
 static notification_ui_t *s_notif_ui = NULL;
 
 static bool s_connected = false;
-static bool s_screen_off = false;       /* the PWR key switched the screen off */
 static uint32_t s_last_activity_tick = 0;
 static display_status_t s_display_status = DISPLAY_STATUS_IDLE;
 static int s_last_minute = -1;
@@ -108,7 +100,7 @@ static void transition_to(ui_state_t new_state)
 
     switch (new_state) {
     case UI_STATE_FULL_IDLE:
-        scene_animate_width(s_full_width, SCENE_ANIM_MS);
+        scene_animate_width(SCENE_FULL_WIDTH, SCENE_ANIM_MS);
         notification_ui_show(s_notif_ui, false, 0);
 
         scene_set_time_visible(s_scene, true);
@@ -128,7 +120,7 @@ static void transition_to(ui_state_t new_state)
         break;
 
     case UI_STATE_NOTIFICATION:
-        scene_animate_width(s_notif_width,
+        scene_animate_width(SCENE_NOTIF_WIDTH,
                             old_state == UI_STATE_FULL_IDLE ? SCENE_ANIM_MS : 0);
         notification_ui_show(s_notif_ui, true, 300);
 
@@ -143,7 +135,7 @@ static void transition_to(ui_state_t new_state)
         break;
 
     case UI_STATE_DISCONNECTED:
-        scene_animate_width(s_full_width, SCENE_ANIM_MS);
+        scene_animate_width(SCENE_FULL_WIDTH, SCENE_ANIM_MS);
         notification_ui_show(s_notif_ui, false, 0);
 
         scene_set_time_visible(s_scene, false);
@@ -163,16 +155,9 @@ void ui_manager_init(void)
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x0f1320), 0);
 
-    /* The layout follows the display width (layout.h): the scene spans the whole display, and while the
-     * notification panel is open it keeps s_notif_width of it. 320 x 172 (the simulator, the original
-     * board) is the original layout; the MiniBar bar's 640 x 172 gets the wide one. */
-    s_full_width = layout_display_width();
-    s_notif_width = layout_is_wide(s_full_width) ? s_full_width - NOTIF_PANEL_WIDTH_WIDE
-                                                 : SCENE_NOTIF_WIDTH_320;
-
     /* Create scene (left panel — starts full width) */
     s_scene = scene_create(screen);
-    scene_set_width(s_scene, s_full_width, 0);
+    scene_set_width(s_scene, SCENE_FULL_WIDTH, 0);
     scene_set_clawd_anim(s_scene, CLAWD_ANIM_DISCONNECTED);
 
     /* Create notification UI (right panel — starts hidden) */
@@ -210,20 +195,7 @@ void ui_manager_handle_event(const ble_evt_t *evt)
         ESP_LOGI(TAG, "Disconnected");
         s_connected = false;
         notif_store_clear(&s_store);
-        /* A daemon that leaves while Clawd sleeps must not leave the screen dark: "No connection" has to show. */
-        if (s_display_status == DISPLAY_STATUS_SLEEPING) {
-            display_set_brightness(config_store_get_brightness());
-            s_display_status = DISPLAY_STATUS_IDLE;
-        }
         transition_to(UI_STATE_DISCONNECTED);
-        break;
-
-    case BLE_EVT_SCREEN_TOGGLE:
-        /* The PWR key. Off stays off until the key is pressed again: notifications and Claude's activity keep
-         * updating the scene, but never light the backlight. */
-        s_screen_off = !s_screen_off;
-        display_set_screen_off(s_screen_off);
-        ESP_LOGI(TAG, "PWR key: screen %s", s_screen_off ? "off" : "on");
         break;
 
     case BLE_EVT_NOTIF_ADD:
@@ -306,10 +278,7 @@ void ui_manager_handle_event(const ble_evt_t *evt)
 
         /* Handle backlight for sleep/wake */
         if (new_status == DISPLAY_STATUS_SLEEPING && old_status != DISPLAY_STATUS_SLEEPING) {
-            /* The bar sits on a desk, so a sleeping Clawd stays visible, dimmed; CLAWD_SLEEP_BRIGHTNESS 0 is the
-             * upstream behaviour (screen off). Never brighter than the configured level. */
-            uint8_t cfg = config_store_get_brightness();
-            display_set_brightness(CONFIG_CLAWD_SLEEP_BRIGHTNESS < cfg ? CONFIG_CLAWD_SLEEP_BRIGHTNESS : cfg);
+            display_set_brightness(0);
         } else if (new_status != DISPLAY_STATUS_SLEEPING && old_status == DISPLAY_STATUS_SLEEPING) {
             display_set_brightness(config_store_get_brightness());
         }

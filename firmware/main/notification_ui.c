@@ -1,19 +1,16 @@
 #include "notification_ui.h"
-#include "layout.h"
 #include <string.h>
 #include <stdio.h>
 
 /* ---------- Constants ---------- */
 
+#define SCREEN_W              320
 #define SCREEN_H              172
 #define COUNTER_H             20
 #define FEATURED_H            64
-#define FEATURED_H_EXPANDED   (SCREEN_H - COUNTER_H - 8)  /* 320 layout: the hero card fills the panel */
-#define FEATURED_H_HERO_WIDE  80   /* wide layout: the hero card grows to this and the list stays beneath */
-#define HERO_ROWS_WIDE        3    /* compact rows kept under the hero card on the wide layout */
+#define FEATURED_H_EXPANDED   (SCREEN_H - COUNTER_H - 8)  /* fills panel on new notif */
 #define COMPACT_ROW_H         14
 #define DOT_SIZE              6
-#define MESSAGE_Y             18   /* message label's y inside the card; the badge sits at 38 when collapsed */
 
 /* How long the expanded "hero" view is shown before shrinking to compact list */
 #define EXPAND_HOLD_MS        2500
@@ -34,11 +31,6 @@ static const uint32_t accent_colors[NOTIF_MAX_COUNT] = {
 
 struct notification_ui_t {
     lv_obj_t *container;
-
-    /* Layout (layout.h): display width, whether this is the wide layout, hero card height */
-    int display_w;
-    bool wide;
-    int hero_h;
 
     /* Counter header */
     lv_obj_t *counter_label;
@@ -76,9 +68,6 @@ static void expand_hold_timer_cb(lv_timer_t *timer);
 static void featured_height_anim_cb(void *var, int32_t val);
 static void collapse_completed_cb(lv_anim_t *a);
 static void start_collapse_anim(notification_ui_t *ui);
-static void remove_compact_rows(notification_ui_t *ui);
-static void build_compact_rows(notification_ui_t *ui, int featured, int y_pos, int max_rows);
-static void set_featured_message(notification_ui_t *ui, const char *text, int lines);
 
 /* ---------- Create ---------- */
 
@@ -87,15 +76,10 @@ notification_ui_t *notification_ui_create(lv_obj_t *parent)
     notification_ui_t *ui = lv_malloc_zeroed(sizeof(notification_ui_t));
     if (!ui) return NULL;
 
-    /* Which layout (layout.h): the 320 x 172 original, or the wide one on a wider display */
-    ui->display_w = layout_display_width();
-    ui->wide = layout_is_wide(ui->display_w);
-    ui->hero_h = ui->wide ? FEATURED_H_HERO_WIDE : FEATURED_H_EXPANDED;
-
     /* Container — full height, positioned by set_x */
     ui->container = lv_obj_create(parent);
     lv_obj_remove_style_all(ui->container);
-    lv_obj_set_size(ui->container, ui->display_w - 107, SCREEN_H);
+    lv_obj_set_size(ui->container, SCREEN_W - 107, SCREEN_H);
     lv_obj_set_pos(ui->container, 107, 0);
     lv_obj_set_scrollbar_mode(ui->container, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(ui->container, LV_OBJ_FLAG_SCROLLABLE);
@@ -125,7 +109,6 @@ notification_ui_t *notification_ui_create(lv_obj_t *parent)
     lv_obj_set_size(ui->featured_card, lv_pct(95), FEATURED_H);
     lv_obj_set_scrollbar_mode(ui->featured_card, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(ui->featured_card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_user_data(ui->featured_card, ui);  /* for featured_height_anim_cb */
 
     /* Featured: project name — marquee scroll when text overflows */
     ui->featured_project = lv_label_create(ui->featured_card);
@@ -135,15 +118,12 @@ notification_ui_t *notification_ui_create(lv_obj_t *parent)
     lv_label_set_long_mode(ui->featured_project, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_width(ui->featured_project, lv_pct(100));
 
-    /* Featured: message. 320 layout: one line, marquee scroll when the text overflows. Wide layout: wrapped
-     * to the card's content width (two lines in the hero card, one once collapsed, so it never reaches the
-     * badge below), with an ellipsis when even that overflows — LVGL's DOT mode is wrap plus the dots. */
+    /* Featured: message — marquee scroll when text overflows */
     ui->featured_message = lv_label_create(ui->featured_card);
     lv_obj_set_style_text_font(ui->featured_message, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(ui->featured_message, lv_color_hex(0xcc99ff), 0);
-    lv_obj_set_pos(ui->featured_message, 0, MESSAGE_Y);
-    lv_label_set_long_mode(ui->featured_message,
-                           ui->wide ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_pos(ui->featured_message, 0, 18);
+    lv_label_set_long_mode(ui->featured_message, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_width(ui->featured_message, lv_pct(100));
 
     /* Featured: badge */
@@ -242,18 +222,10 @@ static void fade_hide_completed_cb(lv_anim_t *a)
 
 /* ---------- Expand/collapse animation ---------- */
 
-/* Animates featured_card height. On the wide layout the compact rows sit under the hero card and
- * follow its bottom edge as it shrinks. */
+/* Animates featured_card height */
 static void featured_height_anim_cb(void *var, int32_t val)
 {
-    lv_obj_t *card = (lv_obj_t *)var;
-    lv_obj_set_height(card, val);
-    notification_ui_t *ui = (notification_ui_t *)lv_obj_get_user_data(card);
-    if (!ui || !ui->wide) return;
-    int y_pos = COUNTER_H + 2 + val + 6;
-    for (int i = 0; i < ui->compact_count; i++) {
-        if (ui->compact_rows[i]) lv_obj_set_y(ui->compact_rows[i], y_pos + i * COMPACT_ROW_H);
-    }
+    lv_obj_set_height((lv_obj_t *)var, val);
 }
 
 /* Called when the shrink animation completes — show compact rows */
@@ -274,7 +246,7 @@ static void collapse_completed_cb(lv_anim_t *a)
     }
 }
 
-/* Animate the featured card from the hero height → FEATURED_H */
+/* Animate the featured card from FEATURED_H_EXPANDED → FEATURED_H */
 static void start_collapse_anim(notification_ui_t *ui)
 {
     if (!ui || !ui->featured_expanded) return;
@@ -282,7 +254,7 @@ static void start_collapse_anim(notification_ui_t *ui)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, ui->featured_card);
-    lv_anim_set_values(&a, ui->hero_h, FEATURED_H);
+    lv_anim_set_values(&a, FEATURED_H_EXPANDED, FEATURED_H);
     lv_anim_set_duration(&a, EXPAND_ANIM_MS);
     lv_anim_set_exec_cb(&a, featured_height_anim_cb);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
@@ -305,7 +277,7 @@ void notification_ui_set_x(notification_ui_t *ui, int x_px)
 {
     if (!ui) return;
     lv_obj_set_pos(ui->container, x_px, 0);
-    lv_obj_set_width(ui->container, ui->display_w - x_px);
+    lv_obj_set_width(ui->container, SCREEN_W - x_px);
 }
 
 /* ---------- Rebuild from store ---------- */
@@ -379,40 +351,49 @@ static void rebuild_display(notification_ui_t *ui)
     if (count == 0) {
         lv_label_set_text(ui->counter_label, "");
         lv_obj_add_flag(ui->featured_card, LV_OBJ_FLAG_HIDDEN);
-        remove_compact_rows(ui);
+        /* Remove compact rows */
+        for (int i = 0; i < ui->compact_count; i++) {
+            if (ui->compact_rows[i]) {
+                lv_obj_delete(ui->compact_rows[i]);
+                ui->compact_rows[i] = NULL;
+            }
+        }
+        ui->compact_count = 0;
         return;
     }
 
     int fi = ui->featured_idx;
     if (fi >= count) fi = count - 1;
 
-    /* ---- Expanded hero mode: large featured card. 320 layout: it fills the panel, no compact list.
-     * Wide layout: it grows to 80 px and up to three compact rows stay beneath it, from y 108. ---- */
+    /* ---- Expanded hero mode: large featured card, no compact list ---- */
     if (ui->featured_expanded) {
         lv_label_set_text(ui->counter_label, "> NEW!");
         lv_obj_set_style_text_color(ui->counter_label,
                                     lv_color_hex(0xff6b6b), 0);
 
         lv_obj_clear_flag(ui->featured_card, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_height(ui->featured_card, ui->hero_h);
+        lv_obj_set_height(ui->featured_card, FEATURED_H_EXPANDED);
 
         int color_idx = fi % NOTIF_MAX_COUNT;
         lv_obj_set_style_border_color(ui->featured_card,
                                       lv_color_hex(accent_colors[color_idx]), 0);
         lv_label_set_text(ui->featured_project, ui->sorted[fi].project);
-        set_featured_message(ui, ui->sorted[fi].message, 2);
+        lv_label_set_text(ui->featured_message, ui->sorted[fi].message);
 
         /* In hero view, show a prominent "NEW" badge lower in the card */
-        lv_obj_set_pos(ui->featured_badge, 0, ui->hero_h - 24);
+        lv_obj_set_pos(ui->featured_badge, 0, FEATURED_H_EXPANDED - 24);
         lv_label_set_text(ui->featured_badge, "NEW");
         lv_obj_set_style_text_color(ui->featured_badge,
                                     lv_color_hex(0xff6b6b), 0);
 
         /* Remove any stale compact rows (e.g. from a prior rebuild) */
-        remove_compact_rows(ui);
-        if (ui->wide) {
-            build_compact_rows(ui, fi, COUNTER_H + 2 + ui->hero_h + 6, HERO_ROWS_WIDE);
+        for (int i = 0; i < ui->compact_count; i++) {
+            if (ui->compact_rows[i]) {
+                lv_obj_delete(ui->compact_rows[i]);
+                ui->compact_rows[i] = NULL;
+            }
         }
+        ui->compact_count = 0;
         return;
     }
 
@@ -433,9 +414,9 @@ static void rebuild_display(notification_ui_t *ui)
     lv_obj_set_style_border_color(ui->featured_card,
                                   lv_color_hex(accent_colors[color_idx]), 0);
 
-    /* Set full text — SCROLL_CIRCULAR mode will marquee if it overflows (320 layout) */
+    /* Set full text — SCROLL_CIRCULAR mode will marquee if it overflows */
     lv_label_set_text(ui->featured_project, ui->sorted[fi].project);
-    set_featured_message(ui, ui->sorted[fi].message, 1);
+    lv_label_set_text(ui->featured_message, ui->sorted[fi].message);
 
     /* Badge: NEWEST for highest-seq, index label for rotation */
     lv_obj_set_pos(ui->featured_badge, 0, 38);
@@ -452,28 +433,7 @@ static void rebuild_display(notification_ui_t *ui)
                                     lv_color_hex(0x888888), 0);
     }
 
-    /* Build compact list (all except featured, capped to visible area) */
-    remove_compact_rows(ui);
-    int y_pos = COUNTER_H + FEATURED_H + 6;
-    build_compact_rows(ui, fi, y_pos, (SCREEN_H - y_pos) / COMPACT_ROW_H);
-}
-
-/* Set the featured message. Wide layout: give the label room for `lines` lines of its font so the DOT
- * long mode wraps within them and puts an ellipsis after the last; the 320 layout's single-line marquee
- * keeps its content height. */
-static void set_featured_message(notification_ui_t *ui, const char *text, int lines)
-{
-    if (ui->wide) {
-        const lv_font_t *font = lv_obj_get_style_text_font(ui->featured_message, LV_PART_MAIN);
-        int line_space = lv_obj_get_style_text_line_space(ui->featured_message, LV_PART_MAIN);
-        lv_obj_set_height(ui->featured_message,
-                          lv_font_get_line_height(font) * lines + line_space * (lines - 1));
-    }
-    lv_label_set_text(ui->featured_message, text);
-}
-
-static void remove_compact_rows(notification_ui_t *ui)
-{
+    /* Remove old compact rows */
     for (int i = 0; i < ui->compact_count; i++) {
         if (ui->compact_rows[i]) {
             lv_obj_delete(ui->compact_rows[i]);
@@ -481,15 +441,14 @@ static void remove_compact_rows(notification_ui_t *ui)
         }
     }
     ui->compact_count = 0;
-}
 
-/* Compact rows for every notification but the featured one, from y_pos down, at most max_rows */
-static void build_compact_rows(notification_ui_t *ui, int featured, int y_pos, int max_rows)
-{
-    int count = ui->sorted_count;
+    /* Build compact list (all except featured, capped to visible area) */
+    int y_pos = COUNTER_H + FEATURED_H + 6;
+    int max_compact_rows = (SCREEN_H - y_pos) / COMPACT_ROW_H;
+
     for (int i = 0; i < count; i++) {
-        if (i == featured) continue;
-        if (ui->compact_count >= max_rows) break;
+        if (i == fi) continue;
+        if (ui->compact_count >= max_compact_rows) break;
         if (ui->compact_count >= NOTIF_MAX_COUNT) break;
 
         int ci = ui->compact_count;

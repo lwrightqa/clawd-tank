@@ -1,34 +1,4 @@
 # firmware/sdkconfig.defaults
-# MiniBar bar: Waveshare ESP32-S3-Touch-LCD-3.49 V2 (ESP32-S3R8, 16 MB flash, 8 MB octal PSRAM), ESP-IDF 5.4.
-# The chip, flash, PSRAM, console and LVGL-memory settings follow the MiniBar project's sdkconfig.defaults.
-
-# Chip, flash, PSRAM
-CONFIG_IDF_TARGET="esp32s3"
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-# Octal PSRAM at 80 MHz, as in Waveshare's V2 examples. malloc() above 4 KB goes to PSRAM (the sprite frame
-# buffers); the LVGL frame buffers are allocated there explicitly (display.c).
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
-# Boot time: SYS_EN (the battery power hold, on the expander) only goes high once app_main runs; the 8 MB PSRAM
-# test and the bootloader's INFO log would delay it.
-CONFIG_SPIRAM_MEMTEST=n
-CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
-
-# Console: the board's USB-C is the ESP32-S3's USB Serial/JTAG port
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
-CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
-
-# I2C (the TCA9554 expander: power hold, LCD reset, backlight enable). NVS writes disable the flash cache for a
-# while; an IRAM-safe ISR lets a transaction that straddles one finish instead of timing out.
-CONFIG_I2C_ISR_IRAM_SAFE=y
 
 # BLE (NimBLE)
 CONFIG_BT_ENABLED=y
@@ -39,9 +9,16 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
 
+# SPI LCD
+CONFIG_LCD_HOST_SPI2=y
+
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Flash (ESP32-C6FH8 has 8MB embedded flash)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 
 # LVGL
 CONFIG_LV_COLOR_DEPTH_16=y
@@ -50,11 +27,6 @@ CONFIG_LV_FONT_MONTSERRAT_10=y
 CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
-# LVGL's allocations (objects, label text, layers) go to PSRAM through main/board_lv_mem.c, so they don't press on
-# internal RAM; only malloc is custom, string and sprintf stay the C library's.
-CONFIG_LV_USE_CUSTOM_MALLOC=y
-CONFIG_LV_USE_CLIB_STRING=y
-CONFIG_LV_USE_CLIB_SPRINTF=y
 
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000

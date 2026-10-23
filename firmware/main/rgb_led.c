@@ -1,14 +1,5 @@
 // firmware/main/rgb_led.c
 #include "rgb_led.h"
-
-#ifndef SIMULATOR
-/* MiniBar bar port: the Waveshare ESP32-S3-Touch-LCD-3.49 V2 has no WS2812, so the LED API is a no-op on the device;
- * the simulator keeps the original driver below for its on-screen LED (simulator/shims/led_strip.h). */
-void rgb_led_init(void) {}
-void rgb_led_set(uint8_t r, uint8_t g, uint8_t b) { (void)r; (void)g; (void)b; }
-void rgb_led_flash(uint8_t r, uint8_t g, uint8_t b, int duration_ms) { (void)r; (void)g; (void)b; (void)duration_ms; }
-void rgb_led_flash_error(void) {}
-#else
 #include "led_strip.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -187,5 +178,3 @@ void rgb_led_flash_error(void)
 
     esp_timer_start_periodic(s_timer, STEP_MS * 1000);
 }
-
-#endif /* SIMULATOR */

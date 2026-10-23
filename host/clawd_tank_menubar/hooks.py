@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import stat
-import sys
 import textwrap
 from pathlib import Path
 
@@ -14,12 +13,8 @@ from clawd_tank_daemon.protocol import ASK_USER_QUESTION_TOOL
 
 logger = logging.getLogger("clawd-tank.hooks")
 
-IS_WINDOWS = sys.platform == "win32"
-
 CLAWD_DIR = Path.home() / ".clawd-tank"
-# Windows has no shebang handling and no executable bit: the script is a .py
-# file run through the `py` launcher (see windows_hook_command()).
-NOTIFY_SCRIPT_PATH = CLAWD_DIR / ("clawd-tank-notify.py" if IS_WINDOWS else "clawd-tank-notify")
+NOTIFY_SCRIPT_PATH = CLAWD_DIR / "clawd-tank-notify"
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
 # Standalone hook script — uses only Python stdlib, no external imports.
@@ -28,10 +23,9 @@ NOTIFY_SCRIPT = textwrap.dedent('''\
     """clawd-tank-notify - Claude Code hook handler for Clawd Tank.
 
     Reads hook payload from stdin, converts it to a daemon message,
-    and forwards it to the daemon: over a Unix socket (macOS, Linux) or over TCP
-    on 127.0.0.1 (Windows, or CLAWD_TANK_TRANSPORT=tcp). No external dependencies.
+    and forwards it via Unix socket. No external dependencies.
     """
-    # NOTIFY_SCRIPT_VERSION: 2026-10-20-windows-tcp
+    # NOTIFY_SCRIPT_VERSION: 2026-05-30-permission-toolfailure
 
     import json
     import os
@@ -41,52 +35,12 @@ NOTIFY_SCRIPT = textwrap.dedent('''\
     import sys
     from pathlib import Path
 
-    IS_WINDOWS = sys.platform == "win32"
-
-    # Where the daemon listens. Same rules as clawd_tank_daemon/hook_transport.py
-    # (keep in sync): CLAWD_TANK_TRANSPORT = unix | tcp | auto (unix where
-    # AF_UNIX exists, tcp elsewhere), CLAWD_TANK_TCP_PORT, CLAWD_TANK_SOCKET.
     SOCKET_PATH = os.environ.get(
         "CLAWD_TANK_SOCKET",
         str(Path.home() / ".clawd-tank" / "sock"),
     )
-    TCP_HOST = "127.0.0.1"
-    TCP_DEFAULT_PORT = 47421
-    # Short on purpose: Windows takes ~2 s to report a refused loopback connect,
-    # which would delay every tool call while the daemon is down. A live
-    # listener accepts in well under a millisecond. Keep in sync with
-    # hook_transport.TCP_CONNECT_TIMEOUT_SECS.
-    TCP_CONNECT_TIMEOUT = 0.3
 
     _CLAUDE_ARGV_RE = re.compile(r"(^|/)claude($|\\s)")
-
-
-    def _use_tcp():
-        pref = (os.environ.get("CLAWD_TANK_TRANSPORT") or "auto").strip().lower()
-        return pref == "tcp" or not hasattr(socket, "AF_UNIX")
-
-
-    def _tcp_port():
-        try:
-            port = int(os.environ.get("CLAWD_TANK_TCP_PORT") or TCP_DEFAULT_PORT)
-        except ValueError:
-            return TCP_DEFAULT_PORT
-        return port if 1 <= port <= 65535 else TCP_DEFAULT_PORT
-
-
-    def _connect():
-        if _use_tcp():
-            sock = socket.create_connection((TCP_HOST, _tcp_port()), timeout=TCP_CONNECT_TIMEOUT)
-            sock.settimeout(3.0)
-            return sock
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            sock.settimeout(3.0)
-            sock.connect(SOCKET_PATH)
-        except BaseException:
-            sock.close()
-            raise
-        return sock
 
 
     def _ps(field, pid):
@@ -101,71 +55,12 @@ NOTIFY_SCRIPT = textwrap.dedent('''\
             return ""
 
 
-    def _find_claude_pid_windows():
-        """Windows has no `ps`, and Claude Code runs hooks through Git Bash, so
-        os.getppid() is a short-lived bash.exe. Use CLAUDE_PID (Claude Code
-        exports its own PID), else the first claude.exe ancestor from one
-        Toolhelp32 snapshot, else None: the daemon then skips PID dedup and
-        liveness for the session instead of trusting a PID that dies at once.
-        """
-        try:
-            pid = int(os.environ.get("CLAUDE_PID", ""))
-            if pid > 0:
-                return pid
-        except ValueError:
-            pass
-        try:
-            import ctypes
-
-            class ENTRY(ctypes.Structure):
-                _fields_ = [
-                    ("dwSize", ctypes.c_uint32), ("cntUsage", ctypes.c_uint32),
-                    ("th32ProcessID", ctypes.c_uint32), ("th32DefaultHeapID", ctypes.c_void_p),
-                    ("th32ModuleID", ctypes.c_uint32), ("cntThreads", ctypes.c_uint32),
-                    ("th32ParentProcessID", ctypes.c_uint32), ("pcPriClassBase", ctypes.c_long),
-                    ("dwFlags", ctypes.c_uint32), ("szExeFile", ctypes.c_wchar * 260),
-                ]
-
-            k32 = ctypes.WinDLL("kernel32")
-            k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
-            k32.CreateToolhelp32Snapshot.argtypes = (ctypes.c_uint32, ctypes.c_uint32)
-            k32.Process32FirstW.argtypes = (ctypes.c_void_p, ctypes.POINTER(ENTRY))
-            k32.Process32NextW.argtypes = (ctypes.c_void_p, ctypes.POINTER(ENTRY))
-            k32.CloseHandle.argtypes = (ctypes.c_void_p,)
-            snap = k32.CreateToolhelp32Snapshot(0x2, 0)
-            if not snap or snap == ctypes.c_void_p(-1).value:
-                return None
-            table = {}
-            try:
-                e = ENTRY()
-                e.dwSize = ctypes.sizeof(ENTRY)
-                ok = k32.Process32FirstW(snap, ctypes.byref(e))
-                while ok:
-                    table[e.th32ProcessID] = (e.th32ParentProcessID, e.szExeFile.lower())
-                    ok = k32.Process32NextW(snap, ctypes.byref(e))
-            finally:
-                k32.CloseHandle(snap)
-        except Exception:
-            return None
-        pid, seen = os.getppid(), set()
-        while pid in table and pid not in seen:
-            seen.add(pid)
-            parent, exe = table[pid]
-            if exe in ("claude.exe", "claude"):
-                return pid
-            pid = parent
-        return None
-
-
     def _find_claude_pid():
         """Walk from os.getppid() up the process tree to find the long-lived
         Claude Code PID. Falls back to os.getppid() if no `claude` ancestor.
-        On Windows see _find_claude_pid_windows (it may return None).
 
         Mirrors clawd_tank_daemon/pid_resolver.py — keep in sync.
         """
-        if IS_WINDOWS:
-            return _find_claude_pid_windows()
         start = os.getppid()
         pid = start
         while pid > 1:
@@ -275,9 +170,7 @@ NOTIFY_SCRIPT = textwrap.dedent('''\
 
     def main():
         try:
-            # Bytes, decoded as UTF-8: Windows' default text encoding (cp1252)
-            # would garble a non-ASCII project folder, or fail outright.
-            raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+            raw = sys.stdin.read()
             if not raw.strip():
                 sys.exit(0)
             payload = json.loads(raw)
@@ -288,39 +181,22 @@ NOTIFY_SCRIPT = textwrap.dedent('''\
         if msg is None:
             sys.exit(0)
 
-        sock = None
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock = _connect()
+            sock.settimeout(3.0)
+            sock.connect(SOCKET_PATH)
             sock.sendall(json.dumps(msg).encode("utf-8") + b"\\n")
-        except OSError:
-            # Daemon not running (refused, no socket file, timeout): best-effort.
+        except (ConnectionRefusedError, FileNotFoundError, socket.timeout):
             sys.exit(0)
         finally:
-            if sock is not None:
-                sock.close()
+            sock.close()
 
 
     if __name__ == "__main__":
         main()
 ''')
 
-
-def windows_hook_command(script_path: Path, launcher: str = "py -3") -> str:
-    """The hook `command` string for Windows: ``py -3 "C:/Users/me/.clawd-tank/clawd-tank-notify.py"``.
-
-    Claude Code on Windows hands the command to Git Bash (or PowerShell/cmd,
-    depending on version and settings). Three things make one string work in
-    all of them: it starts with a plain word (``py``), not a quoted path; the
-    script path is double-quoted, so a profile folder with a space survives;
-    and it uses forward slashes, because bash eats the backslashes of an
-    unquoted Windows path and a quoted one is only safe by luck. Windows
-    itself accepts forward slashes in file paths. There is no shebang and no
-    ``.sh`` anywhere: ``py`` runs the file by explicit path.
-    """
-    return f'{launcher} "{Path(script_path).as_posix()}"'
-
-
-HOOK_COMMAND = windows_hook_command(NOTIFY_SCRIPT_PATH) if IS_WINDOWS else str(NOTIFY_SCRIPT_PATH)
+HOOK_COMMAND = str(NOTIFY_SCRIPT_PATH)
 
 HOOKS_CONFIG = {
     "SessionStart": [
@@ -378,19 +254,10 @@ HOOKS_CONFIG = {
 
 def install_notify_script() -> None:
     """Write the standalone notify script to ~/.clawd-tank/clawd-tank-notify."""
-    write_notify_script(NOTIFY_SCRIPT_PATH)
+    CLAWD_DIR.mkdir(parents=True, exist_ok=True)
+    NOTIFY_SCRIPT_PATH.write_text(NOTIFY_SCRIPT, encoding="utf-8")
+    NOTIFY_SCRIPT_PATH.chmod(0o755)
     logger.info("Installed hook script: %s", NOTIFY_SCRIPT_PATH)
-
-
-def write_notify_script(path: Path) -> None:
-    """Write NOTIFY_SCRIPT to `path`: UTF-8 with LF endings on every platform
-    (Windows' text mode would otherwise write CRLF), executable where that
-    means something."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(NOTIFY_SCRIPT)
-    if not IS_WINDOWS:
-        path.chmod(0o755)
 
 
 def _matcher_of(entry: dict):
@@ -456,16 +323,9 @@ def are_hooks_installed() -> bool:
     if not CLAUDE_SETTINGS_PATH.exists():
         return False
     try:
-        settings = json.loads(CLAUDE_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        settings = json.loads(CLAUDE_SETTINGS_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
         return False
-    return settings_have_our_hooks(settings)
-
-
-def settings_have_our_hooks(settings) -> bool:
-    """True only if every Clawd Tank hook (event + matcher) is registered in this
-    parsed settings dict, and no superseded Clawd Tank group lingers. The pure
-    half of are_hooks_installed(); the installer CLI uses it to detect a no-op."""
     if not isinstance(settings, dict):
         return False
     hooks = settings.get("hooks", {})
@@ -498,28 +358,11 @@ def install_hooks() -> bool:
 
     if CLAUDE_SETTINGS_PATH.exists():
         try:
-            settings = json.loads(CLAUDE_SETTINGS_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            settings = json.loads(CLAUDE_SETTINGS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
             settings = {}
     else:
         settings = {}
-
-    settings = merge_hooks(settings)
-
-    with open(CLAUDE_SETTINGS_PATH, "w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(settings, indent=2) + "\n")
-    logger.info("Installed hooks in %s", CLAUDE_SETTINGS_PATH)
-    return True
-
-
-def merge_hooks(settings) -> dict:
-    """Return `settings` with the Clawd Tank hooks merged in. Pure: no file I/O.
-
-    Mutates and returns the dict it is given (deep-copy first to keep the
-    original). A non-dict input is treated as empty. Every other key, every
-    event we do not manage, and every group of the user's own (including one
-    they share with us) is left exactly as it was; see install_hooks().
-    """
     if not isinstance(settings, dict):
         settings = {}
 
@@ -540,4 +383,6 @@ def merge_hooks(settings) -> dict:
                 kept.append(copy.deepcopy(our_entry))
         hooks[event_name] = kept
 
-    return settings
+    CLAUDE_SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
+    logger.info("Installed hooks in %s", CLAUDE_SETTINGS_PATH)
+    return True

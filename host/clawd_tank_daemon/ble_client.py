@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import sys
 from bleak import BleakClient, BleakScanner
 
 logger = logging.getLogger("clawd-tank.ble")
@@ -13,37 +12,10 @@ NOTIFICATION_CHR_UUID = "71ffb137-8b7a-47c9-9a7a-4b1b16662d9a"
 CONFIG_CHR_UUID = "e9f6e626-5fca-4201-b80c-4d2b51c40f51"
 VERSION_CHR_UUID = "b6dc9a5b-5041-4b32-9f8d-34321df8637c"
 SCAN_INTERVAL_SECS = 5
-# While the device is away, say so at INFO once a minute, not every scan.
-SCAN_PROGRESS_EVERY = 12
 # Upper bound for a single GATT read. bleak's CoreBluetooth backend has its own
 # (much longer, ~20s) read timeout, but on a stale-connected dead link that long
 # hold blocks every other GATT op behind _lock and delays reconnect. Fail fast.
-# On Windows (bleak's WinRT backend) a read on a link Windows already knows is
-# down raises "Not connected" immediately; one it has not noticed yet is bounded
-# by this timeout the same way.
 GATT_READ_TIMEOUT_SECS = 5.0
-
-
-def _platform_client_kwargs() -> dict:
-    """Extra BleakClient arguments for the platform; empty everywhere but Windows.
-
-    WinRT caches the GATT service table of a device it has seen before. The bar
-    is reflashed during development, and a stale cache makes characteristics
-    "disappear" after a firmware change, so ask Windows to rediscover the
-    services on every connect (costs about a second).
-    """
-    if sys.platform == "win32":
-        return {"winrt": {"use_cached_services": False}}
-    return {}
-
-
-def _mtu_text(client: BleakClient) -> str:
-    """The negotiated MTU for the log line; never lets a logging detail turn a
-    good connection into a failed one."""
-    try:
-        return str(client.mtu_size)
-    except Exception:
-        return "unknown"
 
 
 class ClawdBleClient:
@@ -68,27 +40,11 @@ class ClawdBleClient:
         self._loop = asyncio.get_running_loop()
         if self._client is not None:
             await self.disconnect()
-        attempts = 0
         while True:
-            if attempts == 0:
-                logger.info("Scanning for Clawd Tank device...")
-            elif attempts % SCAN_PROGRESS_EVERY == 0:
-                logger.info("Still scanning for Clawd Tank (%ds). Is the bar powered and "
-                            "advertising?", attempts * SCAN_INTERVAL_SECS)
-            else:
-                logger.debug("Scanning for Clawd Tank device...")
-            attempts += 1
-            try:
-                device = await BleakScanner.find_device_by_name(
-                    "Clawd Tank", timeout=SCAN_INTERVAL_SECS
-                )
-            except Exception as e:
-                # Radio off, no adapter, or the OS Bluetooth service down. Keep
-                # retrying so turning Bluetooth on is enough to recover.
-                logger.warning("Bluetooth scan failed: %s. Is Bluetooth turned on? "
-                               "Retrying in %ds...", e, SCAN_INTERVAL_SECS)
-                await asyncio.sleep(SCAN_INTERVAL_SECS)
-                continue
+            logger.info("Scanning for Clawd Tank device...")
+            device = await BleakScanner.find_device_by_name(
+                "Clawd Tank", timeout=SCAN_INTERVAL_SECS
+            )
             if device is None:
                 logger.debug("Clawd Tank not found, retrying...")
                 continue
@@ -98,12 +54,11 @@ class ClawdBleClient:
                 client = BleakClient(
                     device,
                     disconnected_callback=self._on_disconnect,
-                    **_platform_client_kwargs(),
                 )
                 await client.connect()
                 self._client = client
                 self._disconnect_notified = False  # re-arm for this connection
-                logger.info("Connected to Clawd Tank (MTU: %s)", _mtu_text(client))
+                logger.info("Connected to Clawd Tank (MTU: %d)", client.mtu_size)
                 if self._on_connect_cb:
                     self._on_connect_cb()
                 return
@@ -112,26 +67,17 @@ class ClawdBleClient:
                 await asyncio.sleep(SCAN_INTERVAL_SECS)
 
     def _on_disconnect(self, client: BleakClient) -> None:
-        """Handle disconnect — may be called from a non-event-loop thread.
-
-        bleak fires this for a lost link and, on the WinRT backend, also
-        synthesises it from a manual ``disconnect()``; the one-notification
-        guard in ``_notify_disconnect`` and the identity check in
-        ``_clear_client`` make both cases safe.
-        """
+        """Handle disconnect — may be called from a non-event-loop thread."""
         logger.warning("Disconnected from Clawd Tank")
         if self._loop is not None and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._clear_client, client)
+            self._loop.call_soon_threadsafe(self._clear_client)
             self._loop.call_soon_threadsafe(self._notify_disconnect)
         else:
-            self._clear_client(client)
+            self._clear_client()
             self._notify_disconnect()
 
-    def _clear_client(self, client: BleakClient | None = None) -> None:
-        """Drop the stored client, but never a newer one: a late callback from
-        a previous connection must not clear the connection that replaced it."""
-        if client is None or self._client is client:
-            self._client = None
+    def _clear_client(self) -> None:
+        self._client = None
 
     def _notify_disconnect(self) -> None:
         """Fire the disconnect callback at most once per connection.
@@ -247,14 +193,6 @@ class ClawdBleClient:
         branch is never taken. This probe forces a round-trip; on failure it
         drops the client (clearing ``is_connected``) and fires the disconnect
         callback, which is what makes the sender re-scan and reconnect.
-
-        On Windows the WinRT backend tracks the GATT session status itself,
-        so ``is_connected`` goes False and ``disconnected_callback`` fires
-        without this probe; here it is one uncached read every
-        BLE_LIVENESS_INTERVAL_SECS that normally succeeds, and on a link
-        Windows has not yet noticed is down it fails within
-        GATT_READ_TIMEOUT_SECS and triggers the same reconnect. Harmless, and
-        it keeps one code path for both platforms.
 
         Returns True if the link round-trips, False otherwise.
         """
