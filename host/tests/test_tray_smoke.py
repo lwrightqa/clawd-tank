@@ -1,10 +1,10 @@
 """Headless smoke test of the whole tray app, as a real process.
 
 It runs the app from source (``python -m clawd_tank_tray``) and, if it has been
-built, the packaged ``host/tray/dist/ClawdTank/ClawdTank.exe`` (or the exe that
-``CLAWD_TANK_TEST_EXE`` names, e.g. a staged build in ``host/tray/dist-next``; the
-value ``none`` skips the exe run). Both are fully isolated from the user's real
-setup:
+built and is not older than the source, the packaged
+``host/tray/dist/ClawdTank/ClawdTank.exe`` (or the exe that ``CLAWD_TANK_TEST_EXE``
+names, e.g. a staged build in ``host/tray/dist-next``, which is always run; the value
+``none`` skips the exe run). Both are fully isolated from the user's real setup:
 
 * ``CLAWD_TANK_NO_BLE=1``: no Bluetooth transport, so the bar is never touched;
 * ``CLAWD_TANK_TCP_PORT``: a free port, never 47421;
@@ -20,6 +20,7 @@ The tray icon does appear in the notification area for a few seconds.
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -144,12 +145,24 @@ class Run:
             pass
 
 
+def _older_than_the_source(exe: Path) -> bool:
+    """A packaged exe built before the newest change to the package cannot show what the
+    source now does (it still runs, as it always did, on whoever's machine it sits)."""
+    newest = max(p.stat().st_mtime for p in (HOST / "clawd_tank_tray").glob("*.py"))
+    return exe.stat().st_mtime < newest
+
+
 LAUNCHERS = [pytest.param([sys.executable, "-m", "clawd_tank_tray"], id="source")]
-if EXE.exists() and _EXE_OVERRIDE.lower() != "none":
-    LAUNCHERS.append(pytest.param([str(EXE)], id="exe"))
-else:
+if not EXE.exists() or _EXE_OVERRIDE.lower() == "none":
     LAUNCHERS.append(pytest.param([str(EXE)], id="exe", marks=pytest.mark.skip(
         reason="ClawdTank.exe is not built (host/tray/build-tray.ps1)")))
+elif not _EXE_OVERRIDE and _older_than_the_source(EXE):
+    # the default exe (host/tray/dist) only; one named with CLAWD_TANK_TEST_EXE is always run
+    LAUNCHERS.append(pytest.param([str(EXE)], id="exe", marks=pytest.mark.skip(
+        reason="host/tray/dist is older than the source: rebuild it (host/tray/build-tray.ps1), or "
+               "point CLAWD_TANK_TEST_EXE at a fresh build such as host/tray/dist-next")))
+else:
+    LAUNCHERS.append(pytest.param([str(EXE)], id="exe"))
 
 
 @pytest.mark.parametrize("command", LAUNCHERS)
@@ -192,7 +205,7 @@ def test_app_starts_serves_hooks_and_quits(command, tmp_path):
         assert run.log_text().count("Tray icon: ") == icon_changes, run.log_text()
 
         # a second launch exits at once, leaves the first one running, and makes
-        # it show its window (as does --show)
+        # it open its flyout (as does --show)
         second = subprocess.run(command + ["--minimized", "--no-prompt"], env=run.env,
                                 cwd=str(HOST), timeout=15, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -201,6 +214,9 @@ def test_app_starts_serves_hooks_and_quits(command, tmp_path):
         assert wait_until(lambda: "Show requested" in run.log_text(), 5), run.log_text()
         assert run.control("--show") == 0
         assert wait_until(lambda: run.log_text().count("Show requested") >= 2, 5), run.log_text()
+        # ... and the flyout opened: it was placed (next to the tray icon or in the corner)
+        assert wait_until(lambda: re.search(r"Flyout \d+x\d+ at -?\d+,-?\d+ \(\w+ taskbar",
+                                            run.log_text()), 5), run.log_text()
 
         # Quit through the control message: clean stop, clean exit
         assert run.control("--quit") == 0

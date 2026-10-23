@@ -2,18 +2,19 @@
 
 Threads
 -------
-* **main**: tkinter. Owns the window, the two housekeeping timers (`after`: the
+* **main**: tkinter. Owns the flyout, the two housekeeping timers (`after`: the
   queue pump and the engine watchdog), and all decisions. Nothing else may touch
   a widget. There is no animation and no timer for one: the tray icon is a still
-  picture that changes only when the connection state does.
+  picture that changes only when the connection state does (the flyout's short
+  opening animation is a chain of timers that ends by itself).
 * **pystray**: the notification-area message loop (``run_detached``). Its menu
-  callbacks only ``post()`` a message.
+  callbacks and the left click only ``post()`` a message.
 * **engine**: the daemon's asyncio loop (engine.py). Its events are ``post()``ed.
 * **instance**: waits for the show/quit events of a second launch; ``post()``s.
 
 ``post()`` is a thread-safe queue; the main thread drains it every 100 ms
 (``after``), applies the events to one ``ViewState`` and, only when something
-changed, updates the tray icon, tooltip and window. The tray is told about a new
+changed, updates the tray icon, tooltip and flyout. The tray is told about a new
 icon or tooltip only when the connection state changed; what Claude is doing
 reaches the window and the menu as text and leaves the icon alone.
 """
@@ -22,9 +23,10 @@ import logging
 import os
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
-from typing import Optional
+from typing import Callable, Optional
 
 import pystray
 
@@ -32,15 +34,17 @@ from . import APP_NAME, __version__
 from .autostart import Autostart
 from .config import AppConfig
 from .engine import DaemonEngine
+from .flyout import Placement, place_flyout
 from .hookctl import HookManager, HookStatus, should_prompt
 from .icons import IconSet, tray_icon_size
 from .logsetup import tk_exception_handler
 from .options import Options, app_dir, log_path, settings_path
 from .single_instance import SingleInstance
 from .state import EngineStatus, ViewState
+from .theme import current_theme
 from .tray_icon import ClawdTrayIcon, HiconCache
-from .window import MainWindow
-from .winutil import ErrorBoxes
+from .window import FlyoutWindow
+from .winutil import ErrorBoxes, Win32Shell
 
 logger = logging.getLogger("clawd-tank.tray.app")
 
@@ -51,23 +55,29 @@ QUIT_TIMEOUT_SECS = 10.0
 
 
 class Dialogs:
-    """The Yes/No and message dialogs. Parent-less when the window is hidden, so
-    a question from the tray still appears."""
+    """The Yes/No and message dialogs. The flyout is closed first (``before``): a
+    dialog taking the focus would close it anyway, and a flyout that is hidden
+    while a dialog it owns is open would hide the dialog with it."""
 
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, before: Optional[Callable[[], None]] = None):
         self._root = root
+        self.before = before
 
-    def _parent(self):
-        return self._root if self._root.state() == "normal" else None
+    def _prepare(self) -> None:
+        if self.before is not None:
+            self.before()
 
     def ask_yes_no(self, title: str, text: str) -> bool:
-        return bool(messagebox.askyesno(title, text, parent=self._parent()))
+        self._prepare()
+        return bool(messagebox.askyesno(title, text))
 
     def info(self, title: str, text: str) -> None:
-        messagebox.showinfo(title, text, parent=self._parent())
+        self._prepare()
+        messagebox.showinfo(title, text)
 
     def error(self, title: str, text: str) -> None:
-        messagebox.showerror(title, text, parent=self._parent())
+        self._prepare()
+        messagebox.showerror(title, text)
 
 
 class TrayApp:
@@ -76,8 +86,10 @@ class TrayApp:
                  icons: Optional[IconSet] = None,
                  hooks: Optional[HookManager] = None,
                  autostart: Optional[Autostart] = None,
-                 config: Optional[AppConfig] = None):
+                 config: Optional[AppConfig] = None,
+                 window_options: Optional[dict] = None):
         self.options = options
+        self.window_options = dict(window_options or {})   # FlyoutWindow keywords (tests)
         self.instance = instance
         self.errors = errors or ErrorBoxes(enabled=not options.no_prompt)
         self.icons = icons or IconSet()
@@ -97,7 +109,7 @@ class TrayApp:
         self._can_retry = False
 
         self.root: Optional[tk.Tk] = None
-        self.window: Optional[MainWindow] = None
+        self.window: Optional[FlyoutWindow] = None
         self.dialogs: Optional[Dialogs] = None
         self.tray: Optional[ClawdTrayIcon] = None
         self.engine: Optional[DaemonEngine] = None
@@ -117,7 +129,12 @@ class TrayApp:
         self.root.report_callback_exception = tk_exception_handler(self.errors)
         self.dialogs = Dialogs(self.root)
         scale = self.root.winfo_fpixels("1i") / 96.0
-        self.window = MainWindow(self.root, self.icons, self._window_actions(), scale)
+        self.window = FlyoutWindow(
+            self.root, self.icons, self._window_actions(), scale,
+            **{"theme_source": current_theme, "autostart": self._autostart_enabled,
+               "placer": self._place_flyout, "before_show": self._before_window_show,
+               **self.window_options})
+        self.dialogs.before = lambda: self.window.hide("dialog")
         self._tray_size = tray_icon_size()
         logger.info("Clawd Tank %s starting (pid %d, tray icon %dpx, ui scale %.2f)",
                     __version__, os.getpid(), self._tray_size, scale)
@@ -129,6 +146,7 @@ class TrayApp:
 
         self.hook_status = self._safe_hook_status()
         self._start_tray()
+        self.window.autohide = self.tray is not None   # with no tray icon, only Quit closes it
         self.instance.start_listener(lambda: self.post("show"), lambda: self.post("quit"))
         try:
             if self.autostart.repair():
@@ -152,9 +170,10 @@ class TrayApp:
         return 0
 
     def _window_actions(self) -> dict:
-        """What the window's buttons do (the tray menu posts the same actions)."""
-        return {"install": self.install_hooks, "open_log": self.open_log,
-                "hide": self.window_hide, "quit": self.quit, "retry": self.retry}
+        """What the flyout's rows do (the tray menu posts the same actions)."""
+        return {"install": self.install_hooks, "remove": self.remove_hooks,
+                "open_log": self.open_log, "toggle_autostart": self.toggle_autostart,
+                "quit": self.quit, "retry": self.retry}
 
     def _cleanup(self) -> None:
         """However the main loop ended (Quit, or a crash): the tray icon goes, the
@@ -184,7 +203,8 @@ class TrayApp:
             self._icon_name = self.view.icon_name()
             self.tray = ClawdTrayIcon(
                 "ClawdTank", icon=self.icons.icon(self._icon_name, self._tray_size),
-                title="Clawd Tank", menu=self._build_menu(), hicons=HiconCache())
+                title="Clawd Tank", menu=self._build_menu(), hicons=HiconCache(),
+                on_click=lambda: self.post("toggle", time.monotonic()))
 
             def ready(icon) -> None:
                 icon.visible = True
@@ -192,7 +212,7 @@ class TrayApp:
 
             self.tray.run_detached(setup=ready)
         except Exception:
-            logger.exception("The tray icon could not be created; showing the window instead")
+            logger.exception("The tray icon could not be created; showing the flyout instead")
             self.tray = None
 
     def _build_menu(self) -> pystray.Menu:
@@ -246,6 +266,8 @@ class TrayApp:
         if kind == "show":
             logger.info("Show requested")
             self.window_show()
+        elif kind == "toggle":
+            logger.info("Tray click: %s", self.window.toggle(payload))
         elif kind == "quit":
             self.quit()
         elif kind == "retry":
@@ -298,15 +320,29 @@ class TrayApp:
         self.window.render(self.view, hs.text if hs else "Checking...",
                            hs.warning if hs else "")
 
-    # --- window ---------------------------------------------------------------------
+    # --- the flyout -----------------------------------------------------------------
 
-    def window_show(self) -> None:
+    def _before_window_show(self) -> None:
+        """Called as the flyout opens, before it is placed: what it shows is current."""
         self.hook_status = self._safe_hook_status()  # the file may have changed since
-        self.window.show()
         self.refresh()
 
+    def _tray_icon_ids(self):
+        return self.tray.shell_ids() if self.tray is not None else []
+
+    def _place_flyout(self, size, scale) -> Placement:
+        placement = place_flyout(Win32Shell(self._tray_icon_ids), size, scale)
+        logger.info("Flyout %dx%d at %d,%d (%s taskbar, work area %s, %s)", size[0], size[1],
+                    placement.x, placement.y, placement.edge, tuple(placement.work),
+                    f"next to the tray icon at {tuple(placement.anchor)}" if placement.anchored
+                    else "in the corner")
+        return placement
+
+    def window_show(self) -> None:
+        self.window.show()
+
     def window_hide(self) -> None:
-        self.window.hide()
+        self.window.hide("app")
 
     # --- actions ----------------------------------------------------------------------
 
@@ -401,7 +437,7 @@ class TrayApp:
             return
         self._quitting = True
         logger.info("Quit requested")
-        self.window.hide()
+        self.window.hide("quit")
         self._status_line = "Quitting..."
 
         def stop_engine() -> None:

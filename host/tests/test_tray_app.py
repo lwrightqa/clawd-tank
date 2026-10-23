@@ -1,8 +1,9 @@
 """TrayApp's decisions without a window: the hooks consent flow, Start with
-Windows, the tray menu, how engine events reach the state, and that the tray icon
-is a still picture that changes with the connection and nothing else. A fake stands in
-for the dialogs; settings.json, the notify script, the registry key and the state
-file are all temporary."""
+Windows, the tray menu, how engine events reach the state, what a left click on the
+tray icon and the other messages do to the flyout, and that the tray icon is a still
+picture that changes with the connection and nothing else. A fake stands in for the
+dialogs; settings.json, the notify script, the registry key and the state file are all
+temporary."""
 
 import json
 import os
@@ -312,9 +313,20 @@ class FakeWindow:
 
     def __init__(self):
         self.renders = 0
+        self.calls = []
 
     def render(self, view, hooks_text, hooks_warning):
         self.renders += 1
+
+    def toggle(self, at=None):
+        self.calls.append(("toggle", at))
+        return "show"
+
+    def show(self):
+        self.calls.append(("show",))
+
+    def hide(self, why="toggle"):
+        self.calls.append(("hide", why))
 
 
 class NoTimerRoot:
@@ -475,3 +487,108 @@ def test_open_log_opens_the_log_in_local_app_data(ctx, monkeypatch, tmp_path):
                         raising=False)
     ctx.open_log()
     assert ctx.dialogs.kinds() == ["error"]
+
+
+# --- the flyout: what the tray click and the other messages do ----------------------------------
+
+
+def test_a_toggle_message_toggles_the_flyout_with_the_time_of_the_click(live):
+    assert live._handle("toggle", 1234.5) is False
+    assert live.window.calls == [("toggle", 1234.5)]
+
+
+def test_show_messages_open_the_flyout_and_do_not_toggle_it(live):
+    """The Open menu item, a second launch (the instance event "show") and --show all
+    arrive as "show": open it, never close it."""
+    live._handle("show", None)
+    live._handle("show", None)
+    assert live.window.calls == [("show",), ("show",)]
+
+
+def test_a_left_click_on_the_tray_icon_posts_a_toggle_stamped_with_the_click_time(ctx, monkeypatch):
+    import time
+
+    import clawd_tank_tray.app as app_mod
+
+    made = {}
+
+    class FakeTray:
+        def __init__(self, *args, **kwargs):
+            made.update(kwargs)
+
+        def run_detached(self, setup=None):
+            pass
+
+    monkeypatch.setattr(app_mod, "ClawdTrayIcon", FakeTray)
+    ctx._start_tray()
+    before = time.monotonic()
+    made["on_click"]()                                   # what the tray thread calls on WM_LBUTTONUP
+    after = time.monotonic()
+    kind, stamp = ctx._queue.get_nowait()
+    assert kind == "toggle" and before <= stamp <= after
+    assert ctx._queue.empty()
+
+
+def test_the_right_click_menu_still_opens_with_open_not_toggle(ctx):
+    posted = []
+    ctx.post = lambda kind, payload=None: posted.append(kind)
+    next(i for i in menu_items(ctx) if i.text == "Open")(None)
+    assert posted == ["show"]
+
+
+def test_the_flyout_rows_do_what_the_menu_items_do(ctx):
+    actions = ctx._window_actions()
+    assert set(actions) == {"install", "remove", "open_log", "toggle_autostart", "quit", "retry"}
+    assert actions["install"] == ctx.install_hooks and actions["remove"] == ctx.remove_hooks
+    assert actions["open_log"] == ctx.open_log and actions["toggle_autostart"] == ctx.toggle_autostart
+    assert actions["quit"] == ctx.quit and actions["retry"] == ctx.retry
+    assert "hide" not in actions                         # no Hide button: click away or Escape
+
+
+def test_the_start_with_windows_row_flips_the_registry_like_the_menu_item(ctx):
+    assert not ctx._autostart_enabled()
+    ctx._window_actions()["toggle_autostart"]()
+    assert ctx._autostart_enabled() and ctx.autostart.current() == "cmd-x"
+    ctx._handle("toggle_autostart", None)                # the tray menu's way
+    assert not ctx._autostart_enabled()
+
+
+def test_dialogs_close_the_flyout_before_they_open(monkeypatch):
+    from tkinter import messagebox
+
+    from clawd_tank_tray.app import Dialogs
+
+    order = []
+    monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: order.append("ask") or True)
+    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: order.append("info"))
+    monkeypatch.setattr(messagebox, "showerror", lambda *a, **k: order.append("error"))
+    d = Dialogs(None, before=lambda: order.append("hide flyout"))
+    assert d.ask_yes_no("t", "q") is True
+    d.info("t", "x")
+    d.error("t", "x")
+    assert order == ["hide flyout", "ask", "hide flyout", "info", "hide flyout", "error"]
+
+
+def test_a_dialog_is_never_parented_to_the_flyout(monkeypatch):
+    """A dialog owned by a window that then hides would be hidden with it (and, being
+    modal, would hang the app): no parent is passed at all."""
+    from tkinter import messagebox
+
+    from clawd_tank_tray.app import Dialogs
+
+    seen = []
+    monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: seen.append(k) or True)
+    Dialogs(object()).ask_yes_no("t", "q")
+    assert seen == [{}]
+
+
+def test_the_flyout_is_placed_next_to_the_tray_icon_on_this_machine(ctx):
+    ids = []
+    ctx.tray = type("T", (), {"shell_ids": lambda self: ids.append(1) or []})()
+    placement = ctx._place_flyout((300, 360), 1.0)
+    assert ids == [1]                                     # asked the tray icon where it is
+    work = placement.work
+    assert work.left <= placement.x and placement.x + 300 <= work.right
+    assert work.top <= placement.y and placement.y + 360 <= work.bottom
+    ctx.tray = None
+    assert ctx._tray_icon_ids() == []
