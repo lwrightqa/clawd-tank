@@ -362,6 +362,20 @@ def row_views(view) -> list:
 
 # --- the popover -------------------------------------------------------------------------------
 
+def _log_anchor(button) -> None:
+    """Log where AppKit says the status item is, for a flyout that opens in the wrong place."""
+    try:
+        window = button.window()
+        screen = window.screen() if window is not None else None
+        logger.info("Flyout anchor: button bounds %s, window frame %s, window screen %s, "
+                    "main screen %s, mouse %s",
+                    button.bounds(), window.frame() if window is not None else None,
+                    screen.frame() if screen is not None else None,
+                    AppKit.NSScreen.mainScreen().frame(), AppKit.NSEvent.mouseLocation())
+    except Exception:
+        logger.exception("Could not read the status item's position")
+
+
 class ClawdFlyoutPopoverDelegate(AppKit.NSObject):
     """Tells the controller when AppKit closed the popover by itself (a click elsewhere,
     Esc, another app coming to the front)."""
@@ -437,6 +451,7 @@ class FlyoutController:
         if self._view is None:
             self._rebuild()
         self._clear_hover()
+        _log_anchor(status_button)
         # The app has no Dock icon, so it is not active when the status item is
         # clicked; a popover of an inactive app would not take clicks properly.
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
