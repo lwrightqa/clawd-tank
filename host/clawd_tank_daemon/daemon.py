@@ -695,6 +695,13 @@ class ClawdDaemon:
             await self._probe_ble_liveness()
 
     def set_session_timeout(self, seconds: int) -> None:
+        """How long a quiet session stays before the 30 s sweep drops it. Zero or
+        less (the menu's "Never" passes 0) means no time limit: a session then goes
+        only when it ends or its process exits."""
+        if seconds <= 0:
+            self._session_staleness_timeout = float("inf")
+            logger.info("Session staleness timeout set to never (no time limit)")
+            return
         self._session_staleness_timeout = float(seconds)
         logger.info("Session staleness timeout set to %ds", seconds)
 

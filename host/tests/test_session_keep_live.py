@@ -89,6 +89,56 @@ def test_a_process_that_is_gone_is_not_alive(monkeypatch):
     assert not procutil.session_process_alive(None, last_event=5000.0)
 
 
+class _Ps:
+    """A stand-in for ``ps -o lstart= -p PID``."""
+
+    def __init__(self, stdout="", raises=None):
+        self.stdout, self.raises, self.calls = stdout, raises, []
+
+    def run(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if self.raises:
+            raise self.raises
+        return subprocess.CompletedProcess(cmd, 0, stdout=self.stdout, stderr="")
+
+
+@pytest.fixture
+def posix(monkeypatch):
+    monkeypatch.setattr(procutil, "IS_WINDOWS", False)
+
+
+def test_posix_start_time_is_read_from_ps_in_the_c_locale(posix, monkeypatch):
+    ps = _Ps("Fri Oct 23 11:34:02 2026   ")        # ps pads its output with spaces and a newline
+    monkeypatch.setattr(procutil.subprocess, "run", ps.run)
+    got = procutil.process_start_time(4242)
+    assert got == time.mktime(time.strptime("2026-10-23 11:34:02", "%Y-%m-%d %H:%M:%S"))
+    cmd, kw = ps.calls[0]
+    assert cmd == ["ps", "-o", "lstart=", "-p", "4242"] and kw["env"]["LC_ALL"] == "C"
+
+
+def test_posix_start_time_copes_with_a_padded_day_of_month(posix, monkeypatch):
+    monkeypatch.setattr(procutil.subprocess, "run", _Ps("Fri Oct  2 09:05:07 2026").run)
+    assert procutil.process_start_time(1) == time.mktime(
+        time.strptime("2026-10-02 09:05:07", "%Y-%m-%d %H:%M:%S"))
+
+
+@pytest.mark.parametrize("ps", [_Ps(""), _Ps("not a date"), _Ps(raises=OSError("no ps")),
+                                _Ps(raises=subprocess.TimeoutExpired("ps", 2))])
+def test_posix_start_time_is_none_when_ps_cannot_say(posix, monkeypatch, ps):
+    monkeypatch.setattr(procutil.subprocess, "run", ps.run)
+    assert procutil.process_start_time(4242) is None
+
+
+def test_a_recycled_pid_is_caught_on_posix_too(posix, monkeypatch):
+    """A process that started after the session's last event is not the session's."""
+    last_event = time.mktime(time.strptime("2026-10-23 11:00:00", "%Y-%m-%d %H:%M:%S"))
+    monkeypatch.setattr(procutil, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(procutil.subprocess, "run", _Ps("Fri Oct 23 12:00:00 2026").run)
+    assert not procutil.session_process_alive(4242, last_event)
+    monkeypatch.setattr(procutil.subprocess, "run", _Ps("Fri Oct 23 09:00:00 2026").run)
+    assert procutil.session_process_alive(4242, last_event)
+
+
 @pytest.mark.skipif(not procutil.IS_WINDOWS, reason="creation time is read through the Windows API")
 def test_process_start_time_of_a_real_process():
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
