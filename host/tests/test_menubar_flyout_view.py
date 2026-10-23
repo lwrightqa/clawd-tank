@@ -332,7 +332,8 @@ def test_the_fallback_anchor_is_a_window_in_the_menu_bar_and_goes_away(mac):
     view = ctrl._fallback_anchor_view()
     window = view.window()
     assert window is not None and window.isVisible()
-    screen = mac.NSScreen.mainScreen() or mac.NSScreen.screens()[0]
+    import AppKit
+    screen = AppKit.NSScreen.mainScreen() or AppKit.NSScreen.screens()[0]
     frame, area = window.frame(), screen.frame()
     assert frame.origin.y + frame.size.height == area.origin.y + area.size.height   # touches the top
     assert area.origin.x <= frame.origin.x and frame.origin.x + frame.size.width <= area.origin.x + area.size.width
