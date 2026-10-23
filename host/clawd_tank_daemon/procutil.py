@@ -65,6 +65,56 @@ def _pid_alive_windows(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+class _FILETIME(ctypes.Structure):
+    _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
+
+
+# 1601-01-01 to 1970-01-01, in the 100 ns ticks of a FILETIME.
+_EPOCH_DELTA_100NS = 116444736000000000
+
+# Clock noise allowed between a process's creation time and the wall-clock stamp the
+# daemon put on that session's last event.
+START_GRACE_SECS = 10.0
+
+
+def process_start_time(pid: Optional[int]) -> Optional[float]:
+    """When the process was created, in epoch seconds; None when it cannot be told
+    (not Windows, no such process, access refused). Never raises."""
+    if not IS_WINDOWS or pid is None or pid <= 0:
+        return None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        kernel32.GetProcessTimes.argtypes = (ctypes.c_void_p,) + (ctypes.POINTER(_FILETIME),) * 4
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            created, exited, kernel, user = _FILETIME(), _FILETIME(), _FILETIME(), _FILETIME()
+            if not kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                            ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+            ticks = (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+            return (ticks - _EPOCH_DELTA_100NS) / 1e7
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def session_process_alive(pid: Optional[int], last_event: float) -> bool:
+    """True if ``pid`` is still the process that sent a session's events: it is
+    running, and it was not created after the session's last event (a process that
+    started later is a different one that was given a recycled PID). Where the
+    creation time cannot be read, a running process counts."""
+    if not pid_alive(pid):
+        return False
+    started = process_start_time(pid)
+    return started is None or started <= last_event + START_GRACE_SECS
+
+
 class _PROCESSENTRY32W(ctypes.Structure):
     _fields_ = [
         ("dwSize", ctypes.c_uint32),

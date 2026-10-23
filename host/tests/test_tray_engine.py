@@ -112,6 +112,22 @@ def test_starts_serves_hooks_and_stops_cleanly(make_engine, state_dir):
     os.close(daemon_mod._acquire_lock(takeover=False))  # and so is the lock
 
 
+def test_an_open_idle_session_is_there_when_the_app_starts(make_engine, state_dir, monkeypatch):
+    """The app is started (or restarted) while a Claude Code session sits idle at its
+    prompt, long past the 10 minute silence limit: the flyout and the bar must show it
+    without waiting for the next hook."""
+    from clawd_tank_daemon import procutil
+    from clawd_tank_daemon.session_store import save_sessions
+
+    monkeypatch.setattr(procutil, "process_start_time", lambda pid: 1.0)   # long-running
+    save_sessions({"open": {"state": "idle", "last_event": time.time() - 3600, "pid": os.getpid()}},
+                  state_dir / "sessions.json", order=[("open", 1)], next_id=2)
+    eng, rec, _ = make_engine()
+    eng.start()
+    ev = rec.wait_for(lambda n, p: n == "display")
+    assert ev[1]["state"]["anims"] == ["idle"]
+
+
 def test_compact_reports_the_sweeping_one_shot(make_engine):
     eng, rec, port = make_engine()
     eng.start()
